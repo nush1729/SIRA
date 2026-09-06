@@ -79,17 +79,42 @@ export async function buildPool(request: RequestRow): Promise<EngineParticipant[
   const adapter = getCalendarAdapter();
   const interviewers = await prisma.user.findMany({ where: { role: 'INTERVIEWER' } });
 
-  // Confirmed bookings per interviewer inside the window — the load signal.
-  const assignments = await prisma.panelAssignment.findMany({
+  /* Load = confirmed bookings this person already holds INSIDE the scheduling
+   * window. `dailyLimit` is a daily cap, so counting every booking they have
+   * ever had would cap them permanently — which is exactly how S3 lost its
+   * only eligible interviewer. Bookings outside the window are irrelevant. */
+  const booked = await prisma.bookingAssignment.findMany({
     where: {
       interviewerId: { in: interviewers.map((u) => u.id) },
-      request: { bookings: { some: { status: 'CONFIRMED' } } },
+      booking: {
+        status: 'CONFIRMED',
+        startUtc: { gte: request.windowStart, lt: request.windowEnd },
+        requestId: { not: request.id },
+      },
     },
-    include: { request: { include: { bookings: { where: { status: 'CONFIRMED' } } } } },
   });
 
-  const loadFor = (id: string) =>
-    assignments.filter((a) => a.interviewerId === id && a.requestId !== request.id).length;
+  // Older bookings predate BookingAssignment (seeded, or booked before this
+  // release), so fall back to the panel for those.
+  const legacy = await prisma.panelAssignment.findMany({
+    where: {
+      interviewerId: { in: interviewers.map((u) => u.id) },
+      requestId: { not: request.id },
+      request: {
+        bookings: {
+          some: {
+            status: 'CONFIRMED',
+            startUtc: { gte: request.windowStart, lt: request.windowEnd },
+          },
+        },
+      },
+    },
+  });
+
+  const loadFor = (id: string) => {
+    const fromBookings = booked.filter((b) => b.interviewerId === id).length;
+    return fromBookings > 0 ? fromBookings : legacy.filter((a) => a.interviewerId === id).length;
+  };
 
   const candidates: SelectionCandidate[] = interviewers.map((u) => ({
     id: u.id,
@@ -114,24 +139,53 @@ export async function buildPool(request: RequestRow): Promise<EngineParticipant[
     candidates
   );
 
+  /* An interviewer's own confirmed interviews are busy time. Without this the
+   * engine happily proposes a slot the booking guard will then refuse — the
+   * calendar adapter only knows about CalendarBusy rows, not about what SIRA
+   * itself has booked. */
+  const heldBookings = await prisma.booking.findMany({
+    where: {
+      status: 'CONFIRMED',
+      requestId: { not: request.id },
+      startUtc: { lt: request.windowEnd },
+      endUtc: { gt: request.windowStart },
+    },
+    include: { assignedInterviewers: true, request: { include: { panel: true } } },
+  });
+
+  const bookedTimesFor = (userId: string) =>
+    heldBookings
+      .filter(
+        (b) =>
+          b.assignedInterviewers.some((a) => a.interviewerId === userId) ||
+          // Seeded/legacy bookings have no BookingAssignment row yet.
+          (b.assignedInterviewers.length === 0 &&
+            b.request.panel.some((p) => p.interviewerId === userId && p.status !== 'DECLINED'))
+      )
+      .map((b) => ({ start: b.startUtc.toISOString(), end: b.endUtc.toISOString() }));
+
   const byId = new Map(interviewers.map((u) => [u.id, u]));
   const pool: EngineParticipant[] = [];
 
   for (const member of selection.pool) {
     const user = byId.get(member.id);
     if (!user) continue;
-    const busy = await adapter.getBusy(
+    const calendarBusy = await adapter.getBusy(
       user.calendarId || user.email,
       request.windowStart,
       request.windowEnd
     );
+    const busy = [
+      ...calendarBusy.map((b) => ({ start: b.start.toISOString(), end: b.end.toISOString() })),
+      ...bookedTimesFor(user.id),
+    ];
     pool.push({
       id: user.id,
       name: user.name,
       role: 'interviewer',
       timezone: user.timezone,
       availability: [],
-      busy: busy.map((b) => ({ start: b.start.toISOString(), end: b.end.toISOString() })),
+      busy,
       dailyLimit: user.dailyLimit,
       // Pool members are interchangeable — that's the whole point of docs/12.
       isRequired: false,

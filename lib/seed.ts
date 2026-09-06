@@ -1,15 +1,73 @@
+/**
+ * ============================================================================
+ *  Demo dataset — docs/04_SEED_DATA.md.
+ *
+ *  Everything is relative to NEXT MONDAY so the data never goes stale, and
+ *  every wall-clock time is written in the participant's own zone and
+ *  converted to UTC here. Writing UTC by hand is how the previous version
+ *  ended up with interviews outside working hours.
+ *
+ *  Two things this file must get right or the engine returns nothing:
+ *    1. Interviewers need `skills` — pool selection filters on them.
+ *    2. Candidate windows must overlap the panel's working hours.
+ * ============================================================================
+ */
+
 import prisma from './db';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
+
+const DAY_MS = 86_400_000;
+
+const IST = 'Asia/Kolkata';
+const NY = 'America/New_York';
+const LA = 'America/Los_Angeles';
+const LDN = 'Europe/London';
+
+/** Offset of `tz` from UTC, in minutes, at instant `ms`. DST-correct. */
+function zoneOffsetMin(ms: number, tz: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(ms));
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(
+    Number(p.year),
+    Number(p.month) - 1,
+    Number(p.day),
+    Number(p.hour) === 24 ? 0 : Number(p.hour),
+    Number(p.minute),
+    Number(p.second)
+  );
+  return (asUtc - ms) / 60_000;
+}
 
 export async function runSeed() {
-  // 1. Calculate next Monday
   const now = new Date();
-  const daysUntilMonday = ((1 + 7 - now.getUTCDay()) % 7) || 7;
-  const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + daysUntilMonday));
-  
-  // Wipe existing
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const daysUntilMonday = ((8 - new Date(today).getUTCDay()) % 7) || 7;
+  const MONDAY = today + daysUntilMonday * DAY_MS;
+
+  /** Wall-clock time in `tz` on demo day `d` (0 = Monday) → real Date (UTC). */
+  const at = (d: number, hour: number, minute: number, tz: string): Date => {
+    const guess = MONDAY + d * DAY_MS + hour * 3_600_000 + minute * 60_000;
+    const once = guess - zoneOffsetMin(guess, tz) * 60_000;
+    return new Date(guess - zoneOffsetMin(once, tz) * 60_000);
+  };
+  /** Midnight UTC on demo day `d` — for scheduling-window bounds. */
+  const day = (d: number) => new Date(MONDAY + d * DAY_MS);
+
+  // Children before parents, or the FKs bite (docs/11 §5).
   await prisma.eventLog.deleteMany();
   await prisma.notification.deleteMany();
+  await prisma.interviewerTimeLock.deleteMany();
+  await prisma.bookingAssignment.deleteMany();
   await prisma.booking.deleteMany();
   await prisma.panelAssignment.deleteMany();
   await prisma.availabilityWindow.deleteMany();
@@ -20,154 +78,250 @@ export async function runSeed() {
 
   const passwordHash = await bcrypt.hash('demo1234', 10);
 
-  // 2. Staff Users
+  /* -- 1. Staff (docs/04 §1) ----------------------------------------------
+   * Three roles. Jordan runs scheduling as ADMIN and is therefore NOT in the
+   * interviewer pool, so Ananya carries SCREENING.                          */
   const users = await Promise.all([
-    prisma.user.create({ data: { email: 'jordan@example.com', name: 'Jordan Lee', role: 'ADMIN', passwordHash, timezone: 'Europe/London' } }),
-    prisma.user.create({ data: { email: 'vikram@example.com', name: 'Vikram Rao', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'vikram_cal', labels: 'MANAGERIAL', dailyLimit: 2 } }),
-    prisma.user.create({ data: { email: 'alex@example.com', name: 'Alex Rivera', role: 'INTERVIEWER', passwordHash, timezone: 'America/New_York', calendarId: 'alex_cal', labels: 'TECHNICAL,MANAGERIAL', dailyLimit: 2 } }),
-    prisma.user.create({ data: { email: 'priya@example.com', name: 'Priya Sharma', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'priya_cal', labels: 'TECHNICAL', dailyLimit: 3 } }),
-    prisma.user.create({ data: { email: 'rahul@example.com', name: 'Rahul Verma', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'rahul_cal', labels: 'TECHNICAL', dailyLimit: 3 } }),
-    prisma.user.create({ data: { email: 'ananya@example.com', name: 'Ananya Patel', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'ananya_cal', labels: 'HR,SCREENING', dailyLimit: 3 } }),
-    prisma.user.create({ data: { email: 'admin@example.com', name: 'Admin', role: 'ADMIN', passwordHash, timezone: 'Asia/Kolkata' } }),
+    prisma.user.create({
+      data: { email: 'jordan@example.com', name: 'Jordan Lee', role: 'ADMIN', passwordHash, timezone: LDN },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'vikram@example.com', name: 'Vikram Rao', role: 'INTERVIEWER', passwordHash, timezone: IST,
+        calendarId: 'vikram_em', labels: 'MANAGERIAL', skills: 'System Design,Culture,Leadership', dailyLimit: 2,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'alex@example.com', name: 'Alex Rivera', role: 'INTERVIEWER', passwordHash, timezone: NY,
+        calendarId: 'alex_tech', labels: 'TECHNICAL,MANAGERIAL', skills: 'Java,Backend,Go,Leadership', dailyLimit: 2,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'priya@example.com', name: 'Priya Sharma', role: 'INTERVIEWER', passwordHash, timezone: IST,
+        calendarId: 'priya_tech', labels: 'TECHNICAL', skills: 'Java,Backend,React,Full Stack', dailyLimit: 3,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'rahul@example.com', name: 'Rahul Verma', role: 'INTERVIEWER', passwordHash, timezone: IST,
+        calendarId: 'rahul_tech', labels: 'TECHNICAL', skills: 'Java,Backend,React', dailyLimit: 3,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'ananya@example.com', name: 'Ananya Patel', role: 'INTERVIEWER', passwordHash, timezone: IST,
+        calendarId: 'ananya_hr', labels: 'HR,SCREENING', skills: 'Behavioral,Policy,Screening,Sourcing,Design', dailyLimit: 3,
+      },
+    }),
+    prisma.user.create({
+      data: { email: 'admin@example.com', name: 'Admin', role: 'ADMIN', passwordHash, timezone: IST },
+    }),
   ]);
-  
-  const alex = users[2];
-  const priya = users[3];
-  const rahul = users[4];
 
-  // Helper to get dates relative to next Monday
-  const day = (d: number, h: number = 0, m: number = 0) => {
-    const date = new Date(monday);
-    date.setUTCDate(date.getUTCDate() + d);
-    date.setUTCHours(h, m, 0, 0);
-    return date;
+  const [, vikram, alex, priya, rahul, ananya] = users;
+
+  /* -- 2. Busy calendars (docs/04 §2) — this is what creates the clashes -- */
+  const busy: { calendarId: string; title: string; startUtc: Date; endUtc: Date }[] = [];
+  const addBusy = (cal: string, title: string, d: number, from: [number, number], to: [number, number], tz: string) =>
+    busy.push({ calendarId: cal, title, startUtc: at(d, from[0], from[1], tz), endUtc: at(d, to[0], to[1], tz) });
+
+  for (const d of [0, 1, 2, 3, 4]) {
+    addBusy('priya_tech', 'Lunch', d, [12, 0], [13, 0], IST);
+    addBusy('rahul_tech', 'Lunch', d, [12, 0], [13, 0], IST);
+    addBusy('vikram_em', 'Standups', d, [9, 0], [11, 0], IST);
+  }
+  addBusy('priya_tech', 'Sprint planning', 1, [15, 0], [16, 0], IST);
+  addBusy('rahul_tech', 'Release review', 4, [9, 30], [11, 0], IST);
+  // S7: the incident that makes Ryan's reschedule fail.
+  addBusy('rahul_tech', 'Production incident', 1, [15, 0], [17, 30], IST);
+  addBusy('alex_tech', 'Architecture review', 0, [13, 0], [17, 0], NY);
+  addBusy('alex_tech', 'Architecture review', 1, [13, 0], [17, 0], NY);
+  addBusy('alex_tech', '1:1s', 2, [9, 0], [12, 0], NY);
+  addBusy('vikram_em', 'Leadership offsite', 2, [9, 0], [18, 0], IST);
+  addBusy('ananya_hr', 'Policy review', 1, [15, 0], [17, 0], IST);
+  addBusy('ananya_hr', 'Policy review', 3, [15, 0], [17, 0], IST);
+  await prisma.calendarBusy.createMany({ data: busy });
+
+  /* -- 3. Candidates and their scenarios (docs/04 §3) --------------------- */
+  const token = () => randomBytes(24).toString('base64url');
+  const scenarios: { name: string; scenario: string; token: string }[] = [];
+
+  const mk = async (
+    name: string,
+    email: string,
+    timezone: string,
+    req: {
+      jobTitle: string;
+      roundType: 'SCREENING' | 'TECHNICAL' | 'MANAGERIAL' | 'HR';
+      durationMin: number;
+      requiredSkills: string;
+      windowStart: Date;
+      windowEnd: Date;
+      status: 'AWAITING_AVAILABILITY' | 'READY_TO_SCHEDULE' | 'SCHEDULED' | 'RESCHEDULE_REQUIRED';
+      blockedReason?: string;
+    },
+    windows: { startUtc: Date; endUtc: Date }[] = [],
+    label = ''
+  ) => {
+    const candidate = await prisma.candidate.create({ data: { name, email, timezone } });
+    const t = token();
+    const request = await prisma.interviewRequest.create({
+      data: { ...req, candidateId: candidate.id, panelSize: 1, token: t, tokenExpiresAt: day(14) },
+    });
+    if (windows.length) {
+      await prisma.availabilityWindow.createMany({
+        data: windows.map((w) => ({ requestId: request.id, ...w })),
+      });
+    }
+    scenarios.push({ name, scenario: label, token: t });
+    return request;
   };
 
-  // 3. Calendar Busy Blocks
-  await prisma.calendarBusy.createMany({
-    data: [
-      { calendarId: 'priya_cal', title: 'Lunch', startUtc: day(0, 7, 30), endUtc: day(0, 8, 30) }, // Mon 1pm-2pm IST
-      { calendarId: 'priya_cal', title: 'Planning', startUtc: day(1, 4, 30), endUtc: day(1, 6, 30) }, // Tue 10am-12pm IST
-      { calendarId: 'rahul_cal', title: 'Lunch', startUtc: day(0, 7, 30), endUtc: day(0, 8, 30) }, // Mon 1pm-2pm IST
-      { calendarId: 'alex_cal', title: 'Arch Review', startUtc: day(0, 14, 0), endUtc: day(0, 16, 0) }, // Mon 10am-12pm EST
-    ]
+  // S1 — the live happy path: link is live, no windows yet.
+  await mk('Dev Menon', 'dev@example.com', NY, {
+    jobTitle: 'Product Engineer', roundType: 'SCREENING', durationMin: 30, requiredSkills: 'Screening',
+    windowStart: day(0), windowEnd: day(5), status: 'AWAITING_AVAILABILITY',
+  }, [], 'Full candidate journey');
+
+  // S2 — Maya: three qualify on label+skills; load balancing decides.
+  await mk('Maya Iyer', 'maya@example.com', IST, {
+    jobTitle: 'Sr Backend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java,Backend',
+    windowStart: day(0), windowEnd: day(2), status: 'READY_TO_SCHEDULE',
+  }, [
+    { startUtc: at(0, 14, 0, IST), endUtc: at(0, 18, 0, IST) },
+    { startUtc: at(1, 10, 0, IST), endUtc: at(1, 13, 0, IST) },
+  ], 'Pool + load balancing');
+
+  // S3 — Carlos: LA. Kolkata has ZERO working-hours overlap, so only Alex works.
+  await mk('Carlos Mendes', 'carlos@example.com', LA, {
+    jobTitle: 'Platform Engineer', roundType: 'TECHNICAL', durationMin: 45, requiredSkills: 'Java',
+    windowStart: day(2), windowEnd: day(4), status: 'READY_TO_SCHEDULE',
+  }, [
+    { startUtc: at(2, 9, 0, LA), endUtc: at(2, 15, 0, LA) },
+    { startUtc: at(3, 9, 0, LA), endUtc: at(3, 15, 0, LA) },
+  ], 'Timezone filtering');
+
+  // S4 — Sophia: booked Thu 15:00 IST; decline → same-time replacement.
+  const req4 = await mk('Sophia Reddy', 'sophia@example.com', IST, {
+    jobTitle: 'Backend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java,Backend',
+    windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED',
+  }, [
+    { startUtc: at(3, 14, 0, IST), endUtc: at(3, 18, 0, IST) },
+    { startUtc: at(4, 10, 0, IST), endUtc: at(4, 14, 0, IST) },
+  ], 'Same-time replacement');
+  await prisma.panelAssignment.create({
+    data: { requestId: req4.id, interviewerId: priya.id, status: 'ACCEPTED', reason: 'TECHNICAL · Java, Backend · lowest load' },
   });
-
-  // 4. Candidate Scenarios
-  const generateToken = () => Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
-  const scenarios = [];
-
-  // S1 (Dev Menon): AWAITING_AVAILABILITY
-  const s1 = await prisma.candidate.create({ data: { name: 'Dev Menon', email: 'dev@example.com', timezone: 'Asia/Kolkata' } });
-  const req1 = await prisma.interviewRequest.create({
+  await prisma.booking.create({
     data: {
-      candidateId: s1.id, jobTitle: 'Frontend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'React',
-      windowStart: day(0), windowEnd: day(5), status: 'AWAITING_AVAILABILITY', token: generateToken(), tokenExpiresAt: day(5)
-    }
+      requestId: req4.id, startUtc: at(3, 15, 0, IST), endUtc: at(3, 16, 0, IST),
+      activeKey: req4.id, meetLink: 'https://meet.google.com/mock-s4',
+    },
   });
-  scenarios.push({ name: 'S1 (Dev Menon)', scenario: 'AWAITING_AVAILABILITY', token: req1.token });
 
-  // S2 (Maya Iyer): READY_TO_SCHEDULE
-  const s2 = await prisma.candidate.create({ data: { name: 'Maya Iyer', email: 'maya@example.com', timezone: 'Asia/Kolkata' } });
-  const req2 = await prisma.interviewRequest.create({
+  // S5 — Ethan: very few valid slots, so ranking is visible.
+  await mk('Ethan Blake', 'ethan@example.com', LDN, {
+    jobTitle: 'Solutions Engineer', roundType: 'SCREENING', durationMin: 30, requiredSkills: 'Screening',
+    windowStart: day(0), windowEnd: day(5), status: 'READY_TO_SCHEDULE',
+  }, [
+    // London 09:00-13:30 is the only overlap with Kolkata working hours.
+    { startUtc: at(1, 9, 30, LDN), endUtc: at(1, 10, 15, LDN) },
+    { startUtc: at(3, 9, 0, LDN), endUtc: at(3, 9, 45, LDN) },
+  ], 'Few slots, clear ranking');
+
+  // S6 — Chloe: the cancellation demo.
+  const req6 = await mk('Chloe Fernandes', 'chloe@example.com', IST, {
+    jobTitle: 'Customer Success Manager', roundType: 'HR', durationMin: 30, requiredSkills: 'Behavioral',
+    windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED',
+  }, [{ startUtc: at(2, 10, 0, IST), endUtc: at(2, 14, 0, IST) }], 'Cancellation');
+  await prisma.panelAssignment.create({
+    data: { requestId: req6.id, interviewerId: ananya.id, status: 'ACCEPTED', reason: 'HR · Behavioral · lowest load' },
+  });
+  await prisma.booking.create({
     data: {
-      candidateId: s2.id, jobTitle: 'Backend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Node.js',
-      windowStart: day(0), windowEnd: day(2), status: 'READY_TO_SCHEDULE', token: generateToken(), tokenExpiresAt: day(5)
-    }
+      requestId: req6.id, startUtc: at(2, 11, 0, IST), endUtc: at(2, 11, 30, IST),
+      activeKey: req6.id, meetLink: 'https://meet.google.com/mock-s6',
+    },
   });
-  await prisma.availabilityWindow.createMany({ data: [{ requestId: req2.id, startUtc: day(0, 5, 0), endUtc: day(0, 9, 0) }] });
-  scenarios.push({ name: 'S2 (Maya Iyer)', scenario: 'READY_TO_SCHEDULE', token: req2.token });
 
-  // S3 (Carlos Mendes): READY_TO_SCHEDULE (LA timezone)
-  const s3 = await prisma.candidate.create({ data: { name: 'Carlos Mendes', email: 'carlos@example.com', timezone: 'America/Los_Angeles' } });
-  const req3 = await prisma.interviewRequest.create({
+  // S7 — Ryan: booked Tue 16:00 IST, but Rahul now has a production incident
+  // across it, and his earlier windows can't be covered → reschedule fails.
+  const req7 = await mk('Ryan Cole', 'ryan@example.com', IST, {
+    jobTitle: 'Data Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java,Backend',
+    windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED',
+  }, [{ startUtc: at(1, 15, 0, IST), endUtc: at(1, 18, 0, IST) }], 'Reschedule with no options');
+  await prisma.panelAssignment.create({
+    data: { requestId: req7.id, interviewerId: rahul.id, status: 'ACCEPTED', reason: 'TECHNICAL · Java, Backend' },
+  });
+  await prisma.booking.create({
     data: {
-      candidateId: s3.id, jobTitle: 'Senior Backend', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java',
-      windowStart: day(0), windowEnd: day(5), status: 'READY_TO_SCHEDULE', token: generateToken(), tokenExpiresAt: day(5)
-    }
+      requestId: req7.id, startUtc: at(1, 16, 0, IST), endUtc: at(1, 17, 0, IST),
+      activeKey: req7.id, meetLink: 'https://meet.google.com/mock-s7',
+    },
   });
-  await prisma.availabilityWindow.createMany({ data: [{ requestId: req3.id, startUtc: day(0, 16, 0), endUtc: day(0, 20, 0) }] });
-  scenarios.push({ name: 'S3 (Carlos Mendes)', scenario: 'LA Timezone', token: req3.token });
 
-  // S4 (Sophia Reddy): SCHEDULED (Priya declines -> Rahul swaps)
-  const s4 = await prisma.candidate.create({ data: { name: 'Sophia Reddy', email: 'sophia@example.com', timezone: 'Asia/Kolkata' } });
-  const req4 = await prisma.interviewRequest.create({
+  // S8 — Nikhil: booked Fri 10:00 IST; decline → rebooked from his own windows.
+  const req8 = await mk('Nikhil Rao', 'nikhil@example.com', IST, {
+    jobTitle: 'Backend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java,Backend',
+    windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED',
+  }, [
+    { startUtc: at(4, 9, 0, IST), endUtc: at(4, 12, 0, IST) },
+    { startUtc: at(4, 14, 0, IST), endUtc: at(4, 17, 0, IST) },
+  ], 'Auto-rebooked to a new time');
+  await prisma.panelAssignment.create({
+    data: { requestId: req8.id, interviewerId: priya.id, status: 'PENDING', reason: 'TECHNICAL · Java, Backend' },
+  });
+  await prisma.booking.create({
     data: {
-      candidateId: s4.id, jobTitle: 'Frontend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'React',
-      windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED', token: generateToken(), tokenExpiresAt: day(5)
-    }
+      requestId: req8.id, startUtc: at(4, 10, 0, IST), endUtc: at(4, 11, 0, IST),
+      activeKey: req8.id, meetLink: 'https://meet.google.com/mock-s8',
+    },
   });
-  await prisma.panelAssignment.create({ data: { requestId: req4.id, interviewerId: priya.id, status: 'PENDING' } });
-  await prisma.booking.create({ data: { requestId: req4.id, startUtc: day(3, 9, 30), endUtc: day(3, 10, 30), activeKey: req4.id, meetLink: 'https://meet.google.com/mock-s4' } });
-  scenarios.push({ name: 'S4 (Sophia Reddy)', scenario: 'Same-time swap test', token: req4.token });
 
-  // S5 (Ethan Blake): READY_TO_SCHEDULE (tight window)
-  const s5 = await prisma.candidate.create({ data: { name: 'Ethan Blake', email: 'ethan@example.com', timezone: 'Europe/London' } });
-  const req5 = await prisma.interviewRequest.create({
-    data: {
-      candidateId: s5.id, jobTitle: 'Product Designer', roundType: 'HR', durationMin: 45, requiredSkills: 'Design',
-      windowStart: day(0), windowEnd: day(5), status: 'READY_TO_SCHEDULE', token: generateToken(), tokenExpiresAt: day(5)
-    }
-  });
-  await prisma.availabilityWindow.createMany({ data: [{ requestId: req5.id, startUtc: day(1, 10, 0), endUtc: day(1, 11, 0) }] });
-  scenarios.push({ name: 'S5 (Ethan Blake)', scenario: 'Tight Window', token: req5.token });
+  // Alex carries two prior bookings Mon+Tue so his load reads 2/2 and the
+  // load-balancing story in S2 has something to actually balance against.
+  for (const [i, d] of [0, 1].entries()) {
+    const filler = await prisma.candidate.create({
+      data: { name: `Prior Candidate ${i + 1}`, email: `prior${i + 1}@example.com`, timezone: NY },
+    });
+    const fillerReq = await prisma.interviewRequest.create({
+      data: {
+        candidateId: filler.id, jobTitle: 'Platform Engineer', roundType: 'TECHNICAL', durationMin: 60,
+        requiredSkills: 'Java', panelSize: 1, windowStart: day(0), windowEnd: day(5),
+        status: 'SCHEDULED', token: token(), tokenExpiresAt: day(14),
+      },
+    });
+    await prisma.panelAssignment.create({
+      data: { requestId: fillerReq.id, interviewerId: alex.id, status: 'ACCEPTED', reason: 'Pre-existing booking' },
+    });
+    await prisma.booking.create({
+      data: {
+        requestId: fillerReq.id, startUtc: at(d, 10, 0, NY), endUtc: at(d, 11, 0, NY),
+        activeKey: fillerReq.id, meetLink: `https://meet.google.com/mock-prior-${i + 1}`,
+      },
+    });
+  }
 
-  // S6 (Chloe Fernandes): SCHEDULED (Cancellation test)
-  const s6 = await prisma.candidate.create({ data: { name: 'Chloe Fernandes', email: 'chloe@example.com', timezone: 'Asia/Kolkata' } });
-  const req6 = await prisma.interviewRequest.create({
-    data: {
-      candidateId: s6.id, jobTitle: 'Engineering Manager', roundType: 'MANAGERIAL', durationMin: 60, requiredSkills: 'Leadership',
-      windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED', token: generateToken(), tokenExpiresAt: day(5)
-    }
-  });
-  await prisma.panelAssignment.create({ data: { requestId: req6.id, interviewerId: alex.id, status: 'ACCEPTED' } });
-  await prisma.booking.create({ data: { requestId: req6.id, startUtc: day(2, 5, 30), endUtc: day(2, 6, 30), activeKey: req6.id, meetLink: 'https://meet.google.com/mock-s6' } });
-  scenarios.push({ name: 'S6 (Chloe Fernandes)', scenario: 'Cancellation Demo', token: req6.token });
+  void vikram;
 
-  // S7 (Ryan Cole): SCHEDULED (Reschedule fail -> RESCHEDULE_REQUIRED)
-  const s7 = await prisma.candidate.create({ data: { name: 'Ryan Cole', email: 'ryan@example.com', timezone: 'America/New_York' } });
-  const req7 = await prisma.interviewRequest.create({
-    data: {
-      candidateId: s7.id, jobTitle: 'Backend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java',
-      windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED', token: generateToken(), tokenExpiresAt: day(5)
-    }
-  });
-  await prisma.panelAssignment.create({ data: { requestId: req7.id, interviewerId: rahul.id, status: 'DECLINED' } });
-  await prisma.availabilityWindow.createMany({ data: [{ requestId: req7.id, startUtc: day(4, 14, 0), endUtc: day(4, 15, 0) }] });
-  await prisma.booking.create({ data: { requestId: req7.id, startUtc: day(4, 14, 0), endUtc: day(4, 15, 0), activeKey: req7.id, meetLink: 'https://meet.google.com/mock-s7' } });
-  scenarios.push({ name: 'S7 (Ryan Cole)', scenario: 'Reschedule Failure', token: req7.token });
-
-  // S8 (Nikhil Rao): SCHEDULED (Auto-rebooked test)
-  const s8 = await prisma.candidate.create({ data: { name: 'Nikhil Rao', email: 'nikhil@example.com', timezone: 'Asia/Kolkata' } });
-  const req8 = await prisma.interviewRequest.create({
-    data: {
-      candidateId: s8.id, jobTitle: 'Frontend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'React',
-      windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED', token: generateToken(), tokenExpiresAt: day(5)
-    }
-  });
-  await prisma.panelAssignment.create({ data: { requestId: req8.id, interviewerId: priya.id, status: 'PENDING' } });
-  await prisma.availabilityWindow.createMany({ data: [
-    { requestId: req8.id, startUtc: day(4, 4, 30), endUtc: day(4, 5, 30) },
-    { requestId: req8.id, startUtc: day(4, 8, 30), endUtc: day(4, 9, 30) } 
-  ]});
-  await prisma.booking.create({ data: { requestId: req8.id, startUtc: day(4, 4, 30), endUtc: day(4, 5, 30), activeKey: req8.id, meetLink: 'https://meet.google.com/mock-s8' } });
-  scenarios.push({ name: 'S8 (Nikhil Rao)', scenario: 'Auto-rebooked Test', token: req8.token });
-
-  const logins = users.map(u => ({ email: u.email, role: u.role, password: 'demo1234' }));
-  const candidateLinks = scenarios.map(s => ({
+  const logins = users.map((u) => ({ email: u.email, role: u.role, password: 'demo1234' }));
+  const candidateLinks = scenarios.map((s) => ({
     name: s.name,
     scenario: s.scenario,
-    url: `/s/${s.token}`
+    url: `/s/${s.token}`,
   }));
 
   return {
     ok: true,
     counts: {
       users: users.length,
-      candidates: 8,
-      requests: 8
+      candidates: scenarios.length + 2,
+      requests: scenarios.length + 2,
+      busyBlocks: busy.length,
     },
     candidateLinks,
-    logins
+    logins,
   };
 }
