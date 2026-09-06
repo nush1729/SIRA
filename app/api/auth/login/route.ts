@@ -15,15 +15,14 @@ export async function POST(req: Request) {
     }
 
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return NextResponse.json<ApiErr>(
-        { ok: false, error: { code: 'UNAUTHORIZED', message: 'Invalid credentials' } },
-        { status: 401 }
-      );
-    }
-
-    const isValid = await verifyPassword(password, user.passwordHash);
-    if (!isValid) {
+    // Always run a bcrypt compare, real user or not — otherwise "user not
+    // found" returns instantly while a real user takes ~bcrypt-time, and that
+    // gap is an account-enumeration oracle over the login endpoint.
+    const isValid = await verifyPassword(
+      password,
+      user?.passwordHash ?? '$2a$10$CwTycUXWue0Thq9StjUM0uJ8Q0Q9Q0Q9Q0Q9Q0Q9Q0Q9Q0Q9Q0Q9Q'
+    );
+    if (!user || !isValid) {
       return NextResponse.json<ApiErr>(
         { ok: false, error: { code: 'UNAUTHORIZED', message: 'Invalid credentials' } },
         { status: 401 }

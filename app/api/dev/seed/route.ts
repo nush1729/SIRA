@@ -1,13 +1,26 @@
 import { NextResponse } from 'next/server';
 import { runSeed } from '@/lib/seed';
 import { SeedSummary } from '@/lib/contracts';
+import { requireRole, AuthError } from '@/lib/auth';
 
-// ⚠️ KNOWN EXCEPTION: Left unauthenticated deliberately for demo convenience as per architecture doc.
+/**
+ * Destructive (wipes 9 tables) — requires an ADMIN session. No UI button
+ * calls this today; it exists for scripted demo resets. GET below stays
+ * unauthenticated on purpose (the landing page reads it pre-login), but
+ * the destructive verb must not be.
+ */
 export async function POST() {
   try {
+    await requireRole('ADMIN');
     const result = await runSeed();
     return NextResponse.json<SeedSummary>(result as SeedSummary);
   } catch (error) {
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { ok: false, error: { code: error.code, message: error.message } },
+        { status: error.code === 'UNAUTHORIZED' ? 401 : 403 }
+      );
+    }
     console.error('Seed error:', error);
     return NextResponse.json({ ok: false, error: 'Failed to seed database' }, { status: 500 });
   }

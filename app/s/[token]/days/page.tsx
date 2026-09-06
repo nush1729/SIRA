@@ -35,6 +35,7 @@ export default function CandidateDaysPage() {
   const [timezone, setTimezone] = useState("America/New_York");
   const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   /* Days the panel could actually cover. null = not known (mock mode, or the
    * check failed), in which case every weekday stays selectable. */
   const [feasible, setFeasible] = useState<Set<string> | null>(null);
@@ -133,9 +134,15 @@ export default function CandidateDaysPage() {
   async function handleContinue() {
     if (selectedDates.size === 0 || !token) return;
     setIsSubmitting(true);
+    setSubmitError(null);
+
+    // Chronological order, not click order — window[0] carries a "first
+    // choice" weight downstream, so it must be the candidate's earliest
+    // day, not whichever they happened to click first.
+    const sortedDates = Array.from(selectedDates).sort();
 
     // Build TimeWindow objects for chosen dates: 09:00 - 18:00 local time converted to UTC
-    const windows: TimeWindow[] = Array.from(selectedDates).map((dateKey) => {
+    const windows: TimeWindow[] = sortedDates.map((dateKey) => {
       const dayStartLocal = DateTime.fromISO(`${dateKey}T09:00:00`, { zone: timezone });
       const dayEndLocal = DateTime.fromISO(`${dateKey}T18:00:00`, { zone: timezone });
       return {
@@ -145,11 +152,15 @@ export default function CandidateDaysPage() {
     });
 
     // Save windows via public API
-    await submitAvailability(token, windows);
+    const result = await submitAvailability(token, windows);
+    if (!result.ok) {
+      setIsSubmitting(false);
+      setSubmitError(result.error.message || "Couldn't save your availability. Please try again.");
+      return;
+    }
 
-    const sortedDates = Array.from(selectedDates).sort().join(",");
     router.push(
-      `/s/${encodeURIComponent(token)}/times?days=${encodeURIComponent(sortedDates)}&tz=${encodeURIComponent(timezone)}`
+      `/s/${encodeURIComponent(token)}/times?days=${encodeURIComponent(sortedDates.join(","))}&tz=${encodeURIComponent(timezone)}`
     );
   }
 
@@ -263,6 +274,9 @@ export default function CandidateDaysPage() {
               <p className="mt-2 text-center text-xs text-amber-700">
                 Please select at least one day to continue.
               </p>
+            )}
+            {submitError && (
+              <p className="mt-2 text-center text-xs text-red-700">{submitError}</p>
             )}
           </div>
         </div>

@@ -90,6 +90,27 @@ export async function releaseInterviewers(tx: Tx, bookingId: string): Promise<vo
 }
 
 /**
+ * Same-time replacement (§6A step 1): the booking's time doesn't change,
+ * only who's running it. Must release the OLD interviewer's cells and lock
+ * the NEW one's — using `releaseInterviewers` here would wrongly free every
+ * co-panelist's lock on a panelSize>1 booking, and skipping the lock step
+ * entirely (the bug this replaces) means the replacement's time is never
+ * actually reserved, so a second request racing for the same person at the
+ * same time sails through with no conflict.
+ */
+export async function replaceInterviewerAssignment(
+  tx: Tx,
+  params: { bookingId: string; oldInterviewerId: string; newInterviewerId: string; startUtc: Date; endUtc: Date }
+): Promise<void> {
+  const { bookingId, oldInterviewerId, newInterviewerId, startUtc, endUtc } = params;
+
+  await tx.bookingAssignment.deleteMany({ where: { bookingId, interviewerId: oldInterviewerId } });
+  await tx.interviewerTimeLock.deleteMany({ where: { bookingId, interviewerId: oldInterviewerId } });
+
+  await reserveInterviewers(tx, { bookingId, interviewerIds: [newInterviewerId], startUtc, endUtc });
+}
+
+/**
  * Point the request's PanelAssignment rows at whoever the engine actually
  * assigned, so the panel the UI shows matches the people who were booked.
  */

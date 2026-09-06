@@ -1,225 +1,267 @@
+/**
+ * ============================================================================
+ *  §6 reschedule flow — an interviewer declines, or an admin forces a redo.
+ *
+ *  Rewritten to go through the same pool-based machinery as the primary
+ *  booking path (docs/12, lib/scheduling-context.ts) instead of a hand-rolled
+ *  fixed-panel copy. The old version built its own candidate pool with
+ *  `busy: []` and `currentLoad: 0` hardcoded, which meant:
+ *    - same-time replacement picked a "free" person with zero calendar data,
+ *    - auto-rebook could confirm a booking with zero interviewers if the
+ *      declining panelist was the only one, since fixed-panel `generateSlots`
+ *      has nothing to reject an empty interviewer list against.
+ *  Both are structurally impossible now: `findSameTimeReplacement` filters on
+ *  real `busy`, and `generateSlotsFromPool` rejects any slot where fewer than
+ *  `panelSize` pool members are free.
+ * ============================================================================
+ */
 import prisma from '@/lib/db';
 import { getCalendarAdapter } from '@/lib/adapters/calendar';
-import { generateSlots, pickPanel } from '@/lib/engine';
+import { refineWindowsFromPool, findSameTimeReplacement } from '@/lib/engine';
+import { buildSchedulingContext, buildReplacementCandidates } from '@/lib/scheduling-context';
 import { sendNotification } from '@/lib/notify';
-import { releaseInterviewers, reserveInterviewers } from '@/lib/booking';
-import { RescheduleOutcome, EngineParticipant, EngineConfig, RoundType } from '@/lib/contracts';
+import {
+  releaseInterviewers,
+  reserveInterviewers,
+  replaceInterviewerAssignment,
+  syncPanelToBooking,
+  SlotTakenError,
+} from '@/lib/booking';
+import { RescheduleOutcome, RoundType } from '@/lib/contracts';
+import { interviewerAssigned, interviewerChanged, interviewMoved, rescheduleRequired } from '@/lib/email-templates';
+
+const csv = (v: string | null | undefined): string[] =>
+  v ? v.split(',').map((x) => x.trim()).filter(Boolean) : [];
 
 export async function processReschedule(requestId: string, declinerId?: string): Promise<RescheduleOutcome> {
   const request = await prisma.interviewRequest.findUnique({
     where: { id: requestId },
-    include: { candidate: true, windows: true, panel: { include: { interviewer: true } } }
+    include: { candidate: true, windows: true, panel: { include: { interviewer: true } } },
   });
   if (!request) throw new Error('Request not found');
 
-  const booking = await prisma.booking.findFirst({
-    where: { requestId, status: 'CONFIRMED' }
-  });
-
+  const booking = await prisma.booking.findFirst({ where: { requestId, status: 'CONFIRMED' } });
   const adapter = getCalendarAdapter();
 
-  // Branch 1: Same-Time Replacement
+  /* -- Branch 1: Same-Time Replacement (§6A step 1) ------------------------
+   * The booked time is protected; only WHO runs it changes. Uses the exact,
+   * buffer-aware instant check (`findSameTimeReplacement`), not a coarse
+   * window scan — this is one specific slot, not a pool to screen. */
   if (booking && declinerId) {
-    const allUsers = await prisma.user.findMany({ where: { role: 'INTERVIEWER' } });
-    const pool = allUsers.map(u => ({
-      id: u.id,
-      name: u.name,
-      timezone: u.timezone,
-      labels: (u.labels ? u.labels.split(',') : []) as RoundType[],
-      skills: u.skills ? u.skills.split(',') : [],
-      dailyLimit: u.dailyLimit,
-      currentLoad: 0,
-      availability: [],
-      busy: [] 
-    }));
-
-    const excludeIds = request.panel.map(p => p.interviewerId);
-
-    const selection = pickPanel({
-      roundType: request.roundType as RoundType,
-      requiredSkills: request.requiredSkills ? request.requiredSkills.split(',') : [],
-      panelSize: 1, 
-      window: { start: booking.startUtc.toISOString(), end: booking.endUtc.toISOString() }, 
-      durationMin: request.durationMin,
-      excludeIds
-    }, pool);
+    const candidatePool = await buildReplacementCandidates(request);
+    const selection = findSameTimeReplacement(
+      { start: booking.startUtc.toISOString(), end: booking.endUtc.toISOString() },
+      candidatePool,
+      {
+        roundType: request.roundType as RoundType,
+        requiredSkills: csv(request.requiredSkills),
+        panelSize: 1,
+        window: { start: booking.startUtc.toISOString(), end: booking.endUtc.toISOString() },
+        durationMin: request.durationMin,
+      }
+    );
 
     if (!selection.insufficient && selection.selected.length > 0) {
       const replacement = selection.selected[0];
-      
-      await prisma.$transaction(async (tx) => {
-        await tx.panelAssignment.deleteMany({
-          where: { requestId, interviewerId: declinerId }
-        });
-        await tx.panelAssignment.create({
-          data: { requestId, interviewerId: replacement.id, status: 'PENDING', reason: 'Same-time replacement' }
-        });
-        await tx.eventLog.create({
-          data: { requestId, actor: 'system', action: 'REPLACED_SAME_TIME', detail: `Replaced with ${replacement.name}` }
-        });
-      });
 
-      const replacementUser = await prisma.user.findUnique({ where: { id: replacement.id } });
-      if (replacementUser) {
-         await sendNotification({
-           requestId,
-           toEmail: replacementUser.email,
-           template: 'interviewer-booked',
-           subject: 'New Interview',
-           body: 'You have been assigned to an interview.'
-         });
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.panelAssignment.deleteMany({ where: { requestId, interviewerId: declinerId } });
+          await tx.panelAssignment.create({
+            data: { requestId, interviewerId: replacement.id, status: 'PENDING', reason: 'Same-time replacement' },
+          });
+          // Release the decliner's lock on this booking and lock the
+          // replacement's time instead — a plain `releaseInterviewers` would
+          // wrongly free every co-panelist's lock on a panelSize>1 booking.
+          await replaceInterviewerAssignment(tx, {
+            bookingId: booking.id,
+            oldInterviewerId: declinerId,
+            newInterviewerId: replacement.id,
+            startUtc: booking.startUtc,
+            endUtc: booking.endUtc,
+          });
+          await tx.eventLog.create({
+            data: { requestId, actor: 'system', action: 'REPLACED_SAME_TIME', detail: `Replaced with ${replacement.name}` },
+          });
+        });
+
+        const replacementUser = await prisma.user.findUnique({ where: { id: replacement.id } });
+        if (replacementUser) {
+          await sendNotification({
+            requestId,
+            toEmail: replacementUser.email,
+            ...interviewerAssigned({
+              interviewerName: replacementUser.name,
+              candidateName: request.candidate.name,
+              jobTitle: request.jobTitle,
+              roundType: request.roundType,
+              startUtc: booking.startUtc.toISOString(),
+              endUtc: booking.endUtc.toISOString(),
+              timezone: replacementUser.timezone,
+              meetLink: booking.meetLink,
+            }),
+          });
+        }
+
+        await sendNotification({
+          requestId,
+          toEmail: request.candidate.email,
+          ...interviewerChanged({
+            candidateName: request.candidate.name,
+            newInterviewerName: replacement.name,
+            startUtc: booking.startUtc.toISOString(),
+            endUtc: booking.endUtc.toISOString(),
+            timezone: request.candidate.timezone,
+          }),
+        });
+
+        return {
+          outcome: 'REPLACED_SAME_TIME',
+          message: `Successfully replaced interviewer with ${replacement.name} at the exact same time.`,
+          newInterviewerName: replacement.name,
+        };
+      } catch (err) {
+        // Someone else's booking grabbed the replacement's time between the
+        // check above and this transaction — fall through to auto-rebook
+        // rather than silently leaving the request stuck.
+        if (!(err instanceof SlotTakenError)) throw err;
       }
-
-      return {
-        outcome: 'REPLACED_SAME_TIME',
-        message: `Successfully replaced interviewer with ${replacement.name} at the exact same time.`,
-        newInterviewerName: replacement.name
-      };
     }
   }
 
-  // Branch 2: Auto-Rebook
+  /* -- Branch 2: Auto-Rebook (§6A step 2), pool-based ----------------------
+   * Re-run scheduling against the candidate's ALREADY-SUBMITTED windows and
+   * the whole qualified pool (not just the original panel) — a decline
+   * shouldn't fail the interview just because that one person is unavailable
+   * when a qualified, free colleague exists. */
   if (request.windows.length > 0) {
-    const participants: EngineParticipant[] = [];
-    participants.push({
-      id: request.candidate.id,
-      name: request.candidate.name,
-      role: 'candidate',
-      timezone: request.candidate.timezone,
-      availability: request.windows.map(w => ({ start: w.startUtc.toISOString(), end: w.endUtc.toISOString() })),
-      busy: []
-    });
+    const { config, candidate, pool } = await buildSchedulingContext(request);
+    const slotResult = refineWindowsFromPool(candidate.availability, config, candidate, pool, request.panelSize);
 
-    const currentPanel = declinerId ? request.panel.filter(p => p.interviewerId !== declinerId) : request.panel;
-
-    for (const p of currentPanel) {
-      const calId = p.interviewer.calendarId || p.interviewer.email;
-      const busy = await adapter.getBusy(calId, request.windowStart, request.windowEnd);
-      participants.push({
-        id: p.interviewer.id,
-        name: p.interviewer.name,
-        role: 'interviewer',
-        timezone: p.interviewer.timezone,
-        availability: [], 
-        busy: busy.map(b => ({ start: b.start.toISOString(), end: b.end.toISOString() })),
-        dailyLimit: p.interviewer.dailyLimit
-      });
-    }
-
-    const config: EngineConfig = {
-      durationMin: request.durationMin,
-      bufferMin: 15,
-      workingHoursStart: "09:00",
-      workingHoursEnd: "18:00",
-      window: { start: request.windowStart.toISOString(), end: request.windowEnd.toISOString() }
-    };
-
-    const slotResult = generateSlots(config, participants);
-    
-    const validNewSlots = slotResult.slots.filter(s => {
-       if (!booking) return true;
-       return s.start !== booking.startUtc.toISOString() || s.end !== booking.endUtc.toISOString();
+    const validNewSlots = slotResult.slots.filter((s) => {
+      if (!booking) return true;
+      return s.start !== booking.startUtc.toISOString() || s.end !== booking.endUtc.toISOString();
     });
 
     if (validNewSlots.length > 0) {
       const bestSlot = validNewSlots[0];
-      
-      const newBooking = await prisma.$transaction(async (tx) => {
-        if (booking) {
-          await tx.booking.update({
-            where: { id: booking.id },
-            data: { status: 'SUPERSEDED', activeKey: null }
-          });
-          // Free the old cells before locking the new ones, so the interviewer
-          // is never held at two times at once.
-          await releaseInterviewers(tx, booking.id);
-        }
 
-        if (declinerId) {
-          await tx.panelAssignment.deleteMany({
-            where: { requestId, interviewerId: declinerId }
-          });
-        }
-
-        const nb = await tx.booking.create({
-          data: {
-            requestId,
-            startUtc: new Date(bestSlot.start),
-            endUtc: new Date(bestSlot.end),
-            status: 'CONFIRMED',
-            activeKey: requestId
+      try {
+        const newBooking = await prisma.$transaction(async (tx) => {
+          if (booking) {
+            await tx.booking.update({ where: { id: booking.id }, data: { status: 'SUPERSEDED', activeKey: null } });
+            // Free the old cells before locking the new ones, so the interviewer
+            // is never held at two times at once.
+            await releaseInterviewers(tx, booking.id);
           }
+
+          const nb = await tx.booking.create({
+            data: {
+              requestId,
+              startUtc: new Date(bestSlot.start),
+              endUtc: new Date(bestSlot.end),
+              status: 'CONFIRMED',
+              activeKey: requestId,
+            },
+          });
+
+          if (bestSlot.interviewerIds?.length) {
+            await reserveInterviewers(tx, {
+              bookingId: nb.id,
+              interviewerIds: bestSlot.interviewerIds,
+              startUtc: new Date(bestSlot.start),
+              endUtc: new Date(bestSlot.end),
+            });
+            await syncPanelToBooking(tx, {
+              requestId,
+              interviewerIds: bestSlot.interviewerIds,
+              reason: 'Auto-rebooked to a new time',
+            });
+          }
+
+          await tx.eventLog.create({
+            data: { requestId, actor: 'system', action: 'REBOOKED_NEW_TIME', detail: `Auto-rebooked to ${bestSlot.start}` },
+          });
+
+          return nb;
         });
 
-        // Lock the new time for whoever the engine assigned to it.
-        if (bestSlot.interviewerIds?.length) {
-          await reserveInterviewers(tx, {
-            bookingId: nb.id,
-            interviewerIds: bestSlot.interviewerIds,
-            startUtc: new Date(bestSlot.start),
-            endUtc: new Date(bestSlot.end),
+        // Delete old calendar event AFTER transaction commits (external I/O)
+        if (booking?.eventId) await adapter.deleteEvent(booking.eventId);
+
+        const newInterviewers = await prisma.user.findMany({ where: { id: { in: bestSlot.interviewerIds ?? [] } } });
+        const attendees = [request.candidate.email, ...newInterviewers.map((u) => u.email)];
+        const event = await adapter.createEvent({
+          requestId,
+          startUtc: new Date(bestSlot.start),
+          endUtc: new Date(bestSlot.end),
+          attendees,
+          summary: `Interview (Rescheduled): ${request.jobTitle}`,
+          description: 'Interview via SIRA.',
+        });
+
+        await prisma.booking.update({
+          where: { id: newBooking.id },
+          data: { eventId: event.eventId, meetLink: event.meetLink },
+        });
+
+        await sendNotification({
+          requestId,
+          toEmail: request.candidate.email,
+          ...interviewMoved({
+            candidateName: request.candidate.name,
+            startUtc: bestSlot.start,
+            endUtc: bestSlot.end,
+            timezone: request.candidate.timezone,
+            meetLink: event.meetLink,
+          }),
+        });
+
+        for (const person of newInterviewers) {
+          await sendNotification({
+            requestId,
+            toEmail: person.email,
+            ...interviewerAssigned({
+              interviewerName: person.name,
+              candidateName: request.candidate.name,
+              jobTitle: request.jobTitle,
+              roundType: request.roundType,
+              startUtc: bestSlot.start,
+              endUtc: bestSlot.end,
+              timezone: person.timezone,
+              meetLink: event.meetLink,
+            }),
           });
         }
 
-        await tx.eventLog.create({
-          data: { requestId, actor: 'system', action: 'REBOOKED_NEW_TIME', detail: `Auto-rebooked to ${bestSlot.start}` }
-        });
-
-        return nb;
-      });
-
-      // Delete old calendar event AFTER transaction commits (external I/O)
-      if (booking?.eventId) await adapter.deleteEvent(booking.eventId);
-
-      const attendees = [request.candidate.email, ...currentPanel.map(p => p.interviewer.email)];
-      const event = await adapter.createEvent({
-        requestId,
-        startUtc: new Date(bestSlot.start),
-        endUtc: new Date(bestSlot.end),
-        attendees,
-        summary: `Interview (Rescheduled): ${request.jobTitle}`,
-        description: `Interview via SIRA.`
-      });
-
-      await prisma.booking.update({
-        where: { id: newBooking.id },
-        data: { eventId: event.eventId, meetLink: event.meetLink }
-      });
-
-      await sendNotification({
-        requestId,
-        toEmail: request.candidate.email,
-        template: 'rescheduled',
-        subject: `Interview Rescheduled: ${request.jobTitle}`,
-        body: `Your interview has been rescheduled to ${bestSlot.start}. Meet link: ${event.meetLink}`
-      });
-
-      return {
-        outcome: 'REBOOKED_NEW_TIME',
-        message: `Auto-rebooked to a new time based on candidate's original availability.`,
-        newStartUtc: bestSlot.start,
-        newEndUtc: bestSlot.end
-      };
+        return {
+          outcome: 'REBOOKED_NEW_TIME',
+          message: "Auto-rebooked to a new time based on candidate's original availability.",
+          newStartUtc: bestSlot.start,
+          newEndUtc: bestSlot.end,
+        };
+      } catch (err) {
+        // Lost a last-second race for the new slot too — fall through to
+        // RESCHEDULE_REQUIRED rather than throwing past the caller.
+        if (!(err instanceof SlotTakenError)) throw err;
+      }
     }
   }
 
-  // Branch 3: Complete Failure -> RESCHEDULE_REQUIRED
+  /* -- Branch 3: Complete Failure -> RESCHEDULE_REQUIRED ------------------- */
   await prisma.$transaction(async (tx) => {
     if (booking) {
-      await tx.booking.update({
-        where: { id: booking.id },
-        data: { status: 'SUPERSEDED', activeKey: null }
-      });
+      await tx.booking.update({ where: { id: booking.id }, data: { status: 'SUPERSEDED', activeKey: null } });
       await releaseInterviewers(tx, booking.id);
     }
 
     await tx.interviewRequest.update({
       where: { id: requestId },
-      data: { status: 'RESCHEDULE_REQUIRED', blockedReason: 'No alternative slots available.' }
+      data: { status: 'RESCHEDULE_REQUIRED', blockedReason: 'No alternative slots available.' },
     });
 
     await tx.eventLog.create({
-      data: { requestId, actor: 'system', action: 'RESCHEDULE_REQUIRED', detail: `Could not automatically reschedule.` }
+      data: { requestId, actor: 'system', action: 'RESCHEDULE_REQUIRED', detail: 'Could not automatically reschedule.' },
     });
   });
 
@@ -230,13 +272,15 @@ export async function processReschedule(requestId: string, declinerId?: string):
   await sendNotification({
     requestId,
     toEmail: request.candidate.email,
-    template: 'reschedule-request',
-    subject: `Action Required: Reschedule ${request.jobTitle}`,
-    body: `We need to reschedule your interview. Please provide new times: <a href="${baseUrl}/s/${request.token}">${baseUrl}/s/${request.token}</a>`
+    ...rescheduleRequired({
+      candidateName: request.candidate.name,
+      jobTitle: request.jobTitle,
+      link: `${baseUrl}/s/${request.token}`,
+    }),
   });
 
   return {
     outcome: 'RESCHEDULE_REQUIRED',
-    message: 'Could not automatically replace or rebook. Request sent back to candidate for new availability.'
+    message: 'Could not automatically replace or rebook. Request sent back to candidate for new availability.',
   };
 }

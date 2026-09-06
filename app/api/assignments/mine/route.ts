@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth';
+import { requireRole, authErrorStatus } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { AssignmentDTO, RoundType, ApiOk, ApiErr } from '@/lib/contracts';
 
@@ -31,7 +31,7 @@ export async function GET() {
 
     return NextResponse.json<ApiOk<AssignmentDTO[]>>({ ok: true, data });
   } catch (err: any) {
-    if (err.name === 'AuthError') return NextResponse.json<ApiErr>({ ok: false, error: { code: err.code, message: err.message } }, { status: 401 });
+    if (err.name === 'AuthError') return NextResponse.json<ApiErr>({ ok: false, error: { code: err.code, message: err.message } }, { status: authErrorStatus(err.code) });
     return NextResponse.json<ApiErr>({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Internal error' } }, { status: 500 });
   }
 }

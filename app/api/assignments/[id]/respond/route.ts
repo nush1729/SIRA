@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth';
+import { requireRole, authErrorStatus } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { processReschedule } from '@/lib/reschedule';
 import { ApiOk, ApiErr, RescheduleOutcome } from '@/lib/contracts';
@@ -42,7 +42,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const result = await processReschedule(assignment.requestId, session.id);
     return NextResponse.json<ApiOk<RescheduleOutcome>>({ ok: true, data: result });
   } catch (err: any) {
-    if (err.name === 'AuthError') return NextResponse.json<ApiErr>({ ok: false, error: { code: err.code, message: err.message } }, { status: 401 });
+    if (err.name === 'AuthError') return NextResponse.json<ApiErr>({ ok: false, error: { code: err.code, message: err.message } }, { status: authErrorStatus(err.code) });
     return NextResponse.json<ApiErr>({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Internal error' } }, { status: 500 });
   }
 }

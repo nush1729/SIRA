@@ -105,9 +105,13 @@ export function bookingConfirmed(p: {
   timezone: string;
   interviewerNames: string[];
   meetLink: string | null;
+  rescheduleLink?: string;
 }): Mail {
   const when = range(p.startUtc, p.endUtc, p.timezone);
   const who = p.interviewerNames.length ? ` with ${p.interviewerNames.join(' and ')}` : '';
+  const rescheduleParagraph = p.rescheduleLink
+    ? `Need a different time? <a href="${p.rescheduleLink}">Reschedule here</a>.`
+    : `Need a different time? Use the same link you used to book and choose "I need to reschedule".`;
   return {
     template: 'booking_confirmed',
     subject: `Confirmed — ${fmt(p.startUtc, p.timezone)}`,
@@ -116,7 +120,7 @@ export function bookingConfirmed(p: {
       [
         `<strong>${when}</strong>${who}.`,
         `${p.jobTitle} · ${p.roundType.toLowerCase()} · ${p.durationMin} minutes.`,
-        `Need a different time? Use the same link you used to book and choose "I need to reschedule".`,
+        rescheduleParagraph,
       ],
       p.meetLink ? { label: 'Join meeting', url: p.meetLink } : undefined
     ),

@@ -76,6 +76,20 @@ function intersect(a: TimeWindow, b: TimeWindow): TimeWindow | null {
   return { start: new Date(start).toISOString(), end: new Date(end).toISOString() };
 }
 
+/**
+ * Rounds a timestamp UP to the next wall-clock grid boundary (`stepMs`), in
+ * UTC. Without this, a slot loop that starts at `windowStartMs` inherits
+ * whatever arbitrary offset that window happens to carry — e.g. a scheduling
+ * window whose start is "now" (request-creation time, never on a clean
+ * quarter-hour) produces slots at :07/:22/:37/:52 instead of :00/:15/:30/:45.
+ * `InterviewerTimeLock` (docs §13) assumes every slot lands on this grid so
+ * that two overlapping bookings for the same interviewer always collide on a
+ * shared cell — that assumption only holds if generation actually snaps here.
+ */
+function alignToGridUtc(ms: number, stepMs: number): number {
+  return Math.ceil(ms / stepMs) * stepMs;
+}
+
 /** Expands a window by `bufferMin` on both sides — a slot must not encroach on an
  * existing event even by the buffer margin (docs §4/§6). */
 function withBuffer(w: TimeWindow, bufferMin: number): TimeWindow {
@@ -272,7 +286,7 @@ export function generateSlots(config: EngineConfig, participants: EngineParticip
   const seenSlotStarts = new Set<string>();
 
   for (const window of sourceWindows) {
-    const windowStartMs = Date.parse(window.start);
+    const windowStartMs = alignToGridUtc(Date.parse(window.start), stepMs);
     const windowEndMs = Date.parse(window.end);
 
     for (let t = windowStartMs; t + durationMs <= windowEndMs; t += stepMs) {
@@ -362,7 +376,7 @@ export function generateSlotsFromPool(
   const seenSlotStarts = new Set<string>();
 
   for (const window of sourceWindows) {
-    const windowStartMs = Date.parse(window.start);
+    const windowStartMs = alignToGridUtc(Date.parse(window.start), stepMs);
     const windowEndMs = Date.parse(window.end);
 
     for (let t = windowStartMs; t + durationMs <= windowEndMs; t += stepMs) {
@@ -564,22 +578,62 @@ function scoreSlots(valid: ValidSlot[], candidateWindows: TimeWindow[]): ScoredC
 
 /**
  * Sorts by score descending, assigns sequential rank starting at 1, and trims
- * to the top `TOP_N`. Pure and side-effect-free — safe to call directly in
- * tests without going through the full `generateSlots` pipeline.
+ * to the top `TOP_N` — with a day-diversity pass first.
+ *
+ * Without it, a candidate window of several hours produces slots 15 minutes
+ * apart whose scores decay smoothly (earliest-in-range dominates), so a
+ * naive score-desc slice returns the top N as N adjacent offsets on the SAME
+ * day — a candidate who gave three separate days never sees the other two.
+ * Fixed by taking each day's BEST slot first (one per day, round-robin),
+ * then each day's second-best, and so on, until TOP_N is filled. With only
+ * one distinct day in play this is mathematically identical to a plain
+ * score-desc sort, so single-day behavior (and every existing test) is
+ * unchanged.
  */
 export function rankSlots(scored: ScoredCandidate[]): GeneratedSlot[] {
-  return [...scored]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, TOP_N)
-    .map((s, index) => ({
-      start: s.slot.start,
-      end: s.slot.end,
-      score: s.score,
-      rank: index + 1,
-      reasons: s.reasons,
-      interviewerIds: s.assignment.ids,
-      interviewerNames: s.assignment.names,
-    }));
+  const byDay = new Map<string, ScoredCandidate[]>();
+  for (const s of scored) {
+    const day = s.slot.start.slice(0, 10); // UTC calendar day — coarse but stable, no timezone available here
+    const list = byDay.get(day);
+    if (list) list.push(s);
+    else byDay.set(day, [s]);
+  }
+  for (const list of byDay.values()) list.sort((a, b) => b.score - a.score);
+
+  const picked: ScoredCandidate[] = [];
+  const cursors = new Map<string, number>(); // how many slots already taken from this day
+  for (const day of byDay.keys()) cursors.set(day, 0);
+
+  while (picked.length < TOP_N) {
+    // This round: the next slot from each day that still has one, taken in
+    // score order — so within a round the globally strongest options go
+    // first, but no day contributes its 2nd-best until every day with a
+    // 1st-best has been offered.
+    const roundCandidates: ScoredCandidate[] = [];
+    for (const [day, list] of byDay) {
+      const cursor = cursors.get(day)!;
+      if (cursor < list.length) roundCandidates.push(list[cursor]);
+    }
+    if (roundCandidates.length === 0) break; // exhausted every day
+
+    roundCandidates.sort((a, b) => b.score - a.score);
+    for (const s of roundCandidates) {
+      if (picked.length >= TOP_N) break;
+      const day = s.slot.start.slice(0, 10);
+      picked.push(s);
+      cursors.set(day, cursors.get(day)! + 1);
+    }
+  }
+
+  return picked.map((s, index) => ({
+    start: s.slot.start,
+    end: s.slot.end,
+    score: s.score,
+    rank: index + 1,
+    reasons: s.reasons,
+    interviewerIds: s.assignment.ids,
+    interviewerNames: s.assignment.names,
+  }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

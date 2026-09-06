@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/auth';
+import { requireRole, authErrorStatus } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { sendNotification } from '@/lib/notify';
 import { availabilityRequest } from '@/lib/email-templates';
@@ -45,7 +45,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     return NextResponse.json({ ok: true, data: { candidateLink } });
   } catch (err: any) {
-    if (err.name === 'AuthError') return NextResponse.json({ ok: false, error: { code: err.code, message: err.message } }, { status: 401 });
+    if (err.name === 'AuthError') return NextResponse.json({ ok: false, error: { code: err.code, message: err.message } }, { status: authErrorStatus(err.code) });
     return NextResponse.json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Internal error' } }, { status: 500 });
   }
 }

@@ -3,6 +3,9 @@ import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
 import { SessionDTO, Role } from './contracts';
 
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set in production — refusing to start with a guessable session key.');
+}
 const secretKey = process.env.JWT_SECRET || 'fallback-secret-do-not-use-in-prod';
 const key = new TextEncoder().encode(secretKey);
 
@@ -54,6 +57,11 @@ export class AuthError extends Error {
     super(message);
     this.name = 'AuthError';
   }
+}
+
+/** UNAUTHORIZED (not logged in) is 401; FORBIDDEN (logged in, wrong role) is 403. */
+export function authErrorStatus(code: 'UNAUTHORIZED' | 'FORBIDDEN'): 401 | 403 {
+  return code === 'UNAUTHORIZED' ? 401 : 403;
 }
 
 export async function requireRole(...allowedRoles: Role[]): Promise<SessionDTO> {

@@ -24,6 +24,21 @@ const NY = 'America/New_York';
 const LA = 'America/Los_Angeles';
 const LDN = 'Europe/London';
 
+/**
+ * Calendar IDs for the five interviewer secondary calendars. Defaults are
+ * mock keys (used by MockCalendar against the CalendarBusy table). Set the
+ * GOOGLE_CAL_* env vars to the real secondary-calendar ids once they exist
+ * (docs/04 §1) so PROVIDER_MODE=google reads free/busy from the real
+ * calendars instead — no code change needed to switch modes.
+ */
+const CAL = {
+  vikram: process.env.GOOGLE_CAL_VIKRAM || 'vikram_em',
+  alex: process.env.GOOGLE_CAL_ALEX || 'alex_tech',
+  priya: process.env.GOOGLE_CAL_PRIYA || 'priya_tech',
+  rahul: process.env.GOOGLE_CAL_RAHUL || 'rahul_tech',
+  ananya: process.env.GOOGLE_CAL_ANANYA || 'ananya_hr',
+};
+
 /** Offset of `tz` from UTC, in minutes, at instant `ms`. DST-correct. */
 function zoneOffsetMin(ms: number, tz: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -88,7 +103,7 @@ export async function runSeed() {
     prisma.user.create({
       data: {
         email: 'vikram@example.com', name: 'Vikram Rao', role: 'INTERVIEWER', passwordHash, timezone: IST,
-        calendarId: 'vikram_em', labels: 'MANAGERIAL', skills: 'System Design,Culture,Leadership', dailyLimit: 2,
+        calendarId: CAL.vikram, labels: 'MANAGERIAL', skills: 'System Design,Culture,Leadership', dailyLimit: 2,
       },
     }),
     prisma.user.create({
@@ -96,26 +111,26 @@ export async function runSeed() {
         email: 'alex@example.com', name: 'Alex Rivera', role: 'INTERVIEWER', passwordHash, timezone: NY,
         // SCREENING moved here with Jordan's promotion to ADMIN — he is the
         // only interviewer with any working-hours overlap with New York.
-        calendarId: 'alex_tech', labels: 'TECHNICAL,MANAGERIAL,SCREENING',
+        calendarId: CAL.alex, labels: 'TECHNICAL,MANAGERIAL,SCREENING',
         skills: 'Java,Backend,Go,Leadership,Screening,Sourcing', dailyLimit: 2,
       },
     }),
     prisma.user.create({
       data: {
         email: 'priya@example.com', name: 'Priya Sharma', role: 'INTERVIEWER', passwordHash, timezone: IST,
-        calendarId: 'priya_tech', labels: 'TECHNICAL', skills: 'Java,Backend,React,Full Stack', dailyLimit: 3,
+        calendarId: CAL.priya, labels: 'TECHNICAL', skills: 'Java,Backend,React,Full Stack', dailyLimit: 3,
       },
     }),
     prisma.user.create({
       data: {
         email: 'rahul@example.com', name: 'Rahul Verma', role: 'INTERVIEWER', passwordHash, timezone: IST,
-        calendarId: 'rahul_tech', labels: 'TECHNICAL', skills: 'Java,Backend,React', dailyLimit: 3,
+        calendarId: CAL.rahul, labels: 'TECHNICAL', skills: 'Java,Backend,React', dailyLimit: 3,
       },
     }),
     prisma.user.create({
       data: {
         email: 'ananya@example.com', name: 'Ananya Patel', role: 'INTERVIEWER', passwordHash, timezone: IST,
-        calendarId: 'ananya_hr', labels: 'HR,SCREENING', skills: 'Behavioral,Policy,Screening,Sourcing,Design', dailyLimit: 3,
+        calendarId: CAL.ananya, labels: 'HR,SCREENING', skills: 'Behavioral,Policy,Screening,Sourcing,Design', dailyLimit: 3,
       },
     }),
     prisma.user.create({
@@ -131,20 +146,20 @@ export async function runSeed() {
     busy.push({ calendarId: cal, title, startUtc: at(d, from[0], from[1], tz), endUtc: at(d, to[0], to[1], tz) });
 
   for (const d of [0, 1, 2, 3, 4]) {
-    addBusy('priya_tech', 'Lunch', d, [12, 0], [13, 0], IST);
-    addBusy('rahul_tech', 'Lunch', d, [12, 0], [13, 0], IST);
-    addBusy('vikram_em', 'Standups', d, [9, 0], [11, 0], IST);
+    addBusy(CAL.priya, 'Lunch', d, [12, 0], [13, 0], IST);
+    addBusy(CAL.rahul, 'Lunch', d, [12, 0], [13, 0], IST);
+    addBusy(CAL.vikram, 'Standups', d, [9, 0], [11, 0], IST);
   }
-  addBusy('priya_tech', 'Sprint planning', 1, [15, 0], [16, 0], IST);
-  addBusy('rahul_tech', 'Release review', 4, [9, 30], [11, 0], IST);
+  addBusy(CAL.priya, 'Sprint planning', 1, [15, 0], [16, 0], IST);
+  addBusy(CAL.rahul, 'Release review', 4, [9, 30], [11, 0], IST);
   // S7: the incident that makes Ryan's reschedule fail.
-  addBusy('rahul_tech', 'Production incident', 1, [15, 0], [17, 30], IST);
-  addBusy('alex_tech', 'Architecture review', 0, [13, 0], [17, 0], NY);
-  addBusy('alex_tech', 'Architecture review', 1, [13, 0], [17, 0], NY);
-  addBusy('alex_tech', '1:1s', 2, [9, 0], [12, 0], NY);
-  addBusy('vikram_em', 'Leadership offsite', 2, [9, 0], [18, 0], IST);
-  addBusy('ananya_hr', 'Policy review', 1, [15, 0], [17, 0], IST);
-  addBusy('ananya_hr', 'Policy review', 3, [15, 0], [17, 0], IST);
+  addBusy(CAL.rahul, 'Production incident', 1, [15, 0], [17, 30], IST);
+  addBusy(CAL.alex, 'Architecture review', 0, [13, 0], [17, 0], NY);
+  addBusy(CAL.alex, 'Architecture review', 1, [13, 0], [17, 0], NY);
+  addBusy(CAL.alex, '1:1s', 2, [9, 0], [12, 0], NY);
+  addBusy(CAL.vikram, 'Leadership offsite', 2, [9, 0], [18, 0], IST);
+  addBusy(CAL.ananya, 'Policy review', 1, [15, 0], [17, 0], IST);
+  addBusy(CAL.ananya, 'Policy review', 3, [15, 0], [17, 0], IST);
   await prisma.calendarBusy.createMany({ data: busy });
 
   /* -- 3. Candidates and their scenarios (docs/04 §3) --------------------- */

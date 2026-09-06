@@ -56,6 +56,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
     const bookingResult = await prisma.$transaction(async (tx) => {
       const currentReq = await tx.interviewRequest.findUnique({ where: { id } });
       if (currentReq?.status === 'SCHEDULED') throw new Error('ALREADY_BOOKED');
+      if (currentReq?.status === 'CANCELLED') throw new Error('REQUEST_CANCELLED');
 
       await tx.booking.updateMany({
         where: { requestId: id, status: 'CONFIRMED' },
@@ -117,6 +118,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
       data: { eventId: event.eventId, meetLink: event.meetLink },
     });
 
+    const baseUrl = process.env.APP_URL || 'http://localhost:3000';
     await sendNotification({
       requestId: id,
       toEmail: request.candidate.email,
@@ -130,6 +132,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
         timezone: request.candidate.timezone,
         interviewerNames: slot.interviewerNames,
         meetLink: event.meetLink,
+        rescheduleLink: `${baseUrl}/s/${token}/reschedule`,
       }),
     });
 
@@ -165,6 +168,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
     if (err instanceof SlotTakenError || e?.message === 'ALREADY_BOOKED' || e?.code === 'P2002') {
       return NextResponse.json<ApiErr>(
         { ok: false, error: { code: 'ALREADY_BOOKED', message: 'That time was just taken. Please pick another.' } },
+        { status: 409 }
+      );
+    }
+    if (e?.message === 'REQUEST_CANCELLED') {
+      return NextResponse.json<ApiErr>(
+        { ok: false, error: { code: 'REQUEST_CANCELLED', message: 'This interview request has been cancelled.' } },
         { status: 409 }
       );
     }

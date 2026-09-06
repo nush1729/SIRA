@@ -259,6 +259,7 @@ export type ApiErrorCode =
   | "TOKEN_EXPIRED"
   | "SLOT_NO_LONGER_VALID"
   | "ALREADY_BOOKED"
+  | "REQUEST_CANCELLED"
   | "NO_ELIGIBLE_INTERVIEWERS";
 
 // ── DTOs returned by the API (C and D render exactly these) ──

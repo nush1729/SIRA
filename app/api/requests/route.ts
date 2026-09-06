@@ -5,6 +5,7 @@ import { ApiOk, ApiErr, RequestListItemDTO, CreateRequestBody, SelectionCandidat
 import { pickPanel } from '@/lib/engine';
 import { fetchRequestDetail } from '@/lib/data-fetchers';
 import { z } from 'zod';
+import { randomBytes } from 'crypto';
 
 const createSchema = z.object({
   candidateId: z.string().optional(),
@@ -135,7 +136,8 @@ export async function POST(req: Request) {
         candidateId = c.id;
       }
 
-      const generateToken = () => Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
+      // CSPRNG — this token is the only auth on every candidate-facing endpoint.
+      const generateToken = () => randomBytes(24).toString('base64url');
 
       const reqRecord = await tx.interviewRequest.create({
         data: {
