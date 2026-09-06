@@ -5,7 +5,7 @@
  */
 import { BUFFER_MIN, EngineConfig, EngineParticipant, GenerateSlotsResult, SelectionCandidate, SelectionInput, SelectionResult, TimeWindow } from "./contracts";
 import { sameLocalDay, withinWorkingHours } from "./tz";
-import { generateSlots } from "./scheduler";
+import { generateSlots, generateSlotsFromPool } from "./scheduler";
 
 function overlaps(a: TimeWindow, b: TimeWindow): boolean {
   return Date.parse(a.start) < Date.parse(b.end) && Date.parse(b.start) < Date.parse(a.end);
@@ -42,13 +42,13 @@ function withBuffer(w: TimeWindow, bufferMin: number): TimeWindow {
  */
 export function findSameTimeReplacement(
   bookedSlot: TimeWindow,
-  pool: SelectionCandidate[],
+  candidatePool: SelectionCandidate[],
   input: SelectionInput,
   bufferMin: number = BUFFER_MIN
 ): SelectionResult {
   const rejected: SelectionResult["rejected"] = [];
 
-  let working = input.excludeIds?.length ? pool.filter((c) => !input.excludeIds!.includes(c.id)) : pool;
+  let working = input.excludeIds?.length ? candidatePool.filter((c) => !input.excludeIds!.includes(c.id)) : candidatePool;
 
   working = working.filter((c) => {
     if (!c.labels.includes(input.roundType)) {
@@ -95,13 +95,20 @@ export function findSameTimeReplacement(
   });
 
   const sorted = [...working].sort((a, b) => a.currentLoad - b.currentLoad || a.name.localeCompare(b.name));
+  const pool = sorted.map((c) => ({
+    id: c.id,
+    name: c.name,
+    reason: `available at the booked time · load ${c.currentLoad}/${c.dailyLimit}`,
+    currentLoad: c.currentLoad,
+    dailyLimit: c.dailyLimit,
+  }));
   const selected = sorted.slice(0, input.panelSize).map((c) => ({
     id: c.id,
     name: c.name,
     reason: `same-time replacement · load ${c.currentLoad}/${c.dailyLimit}`,
   }));
 
-  return { selected, rejected, insufficient: selected.length < input.panelSize };
+  return { selected, pool, rejected, insufficient: pool.length < input.panelSize };
 }
 
 /**
@@ -127,4 +134,25 @@ export function refineWindows(
 ): GenerateSlotsResult {
   const withPinnedWindows = participants.map((p) => (p.role === "candidate" ? { ...p, availability: candidateWindows } : p));
   return generateSlots(config, withPinnedWindows);
+}
+
+/**
+ * §6B, POOL-AWARE version — same idea as `refineWindows`, but for a round
+ * originally staffed from an interchangeable pool. If the candidate's original
+ * interviewer is now unavailable, a reschedule shouldn't fail just because that
+ * one person can't make it anymore — any other pool member who's free covers
+ * it, exactly like the initial booking. Use this whenever the round has a pool;
+ * fall back to `refineWindows` only for a genuinely fixed, non-substitutable
+ * assignment (docs §3 — most rounds are pooled by round-type label).
+ */
+export function refineWindowsFromPool(
+  candidateWindows: TimeWindow[],
+  config: EngineConfig,
+  candidate: EngineParticipant,
+  pool: EngineParticipant[],
+  panelSize: number,
+  required: EngineParticipant[] = []
+): GenerateSlotsResult {
+  const pinnedCandidate: EngineParticipant = { ...candidate, availability: candidateWindows };
+  return generateSlotsFromPool(config, pinnedCandidate, pool, panelSize, required);
 }

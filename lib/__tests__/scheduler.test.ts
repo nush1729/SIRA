@@ -322,13 +322,28 @@ describe("validateSlot — hardening on the booking path (reachable from an unau
 });
 
 describe("rankSlots — pure sort/rank behaviour", () => {
+  const noAssignment = { ids: [], names: [] };
+
   it("assigns sequential ranks in descending score order", () => {
     const ranked = rankSlots([
-      { slot: { start: "2026-03-09T04:00:00.000Z", end: "2026-03-09T04:30:00.000Z" }, reasons: [], score: 10 },
-      { slot: { start: "2026-03-09T05:00:00.000Z", end: "2026-03-09T05:30:00.000Z" }, reasons: [], score: 40 },
-      { slot: { start: "2026-03-09T06:00:00.000Z", end: "2026-03-09T06:30:00.000Z" }, reasons: [], score: 25 },
+      { slot: { start: "2026-03-09T04:00:00.000Z", end: "2026-03-09T04:30:00.000Z" }, reasons: [], score: 10, assignment: noAssignment },
+      { slot: { start: "2026-03-09T05:00:00.000Z", end: "2026-03-09T05:30:00.000Z" }, reasons: [], score: 40, assignment: noAssignment },
+      { slot: { start: "2026-03-09T06:00:00.000Z", end: "2026-03-09T06:30:00.000Z" }, reasons: [], score: 25, assignment: noAssignment },
     ]);
     expect(ranked.map((r) => r.rank)).toEqual([1, 2, 3]);
     expect(ranked.map((r) => r.score)).toEqual([40, 25, 10]);
+  });
+
+  it("carries the proposed assignment through onto each GeneratedSlot", () => {
+    const ranked = rankSlots([
+      {
+        slot: { start: "2026-03-09T04:00:00.000Z", end: "2026-03-09T04:30:00.000Z" },
+        reasons: [],
+        score: 10,
+        assignment: { ids: ["priya"], names: ["Priya Sharma"] },
+      },
+    ]);
+    expect(ranked[0].interviewerIds).toEqual(["priya"]);
+    expect(ranked[0].interviewerNames).toEqual(["Priya Sharma"]);
   });
 });

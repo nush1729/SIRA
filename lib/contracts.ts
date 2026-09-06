@@ -55,6 +55,16 @@ export interface EngineParticipant {
   dailyLimit?: number;
   /** interviewer only — bookings already held, used for daily-cap + load checks */
   existingBookings?: TimeWindow[];
+  /**
+   * Must this person attend, or are they one of several interchangeable
+   * options? Defaults to TRUE (everyone required) so existing behaviour is
+   * unchanged. Set false for pool members that the engine may swap between.
+   * The candidate is always treated as required regardless of this flag.
+   */
+  isRequired?: boolean;
+  /** interviewer only — current load, used to prefer the least-busy option when
+   *  several pool members could equally cover a slot. */
+  currentLoad?: number;
 }
 
 export interface EngineConfig {
@@ -74,6 +84,20 @@ export interface GeneratedSlot {
   /** Human-readable strings shown directly in the UI. e.g.
    *  "Priya Sharma available 3:00 PM IST", "15-min buffer respected" */
   reasons: string[];
+  /**
+   * WHO would actually run the interview at this slot.
+   *
+   * With pool-based assignment the panel is not fixed when the request is
+   * created — different slots can be covered by different interviewers, and
+   * the assignment is only settled when a slot is booked. These fields carry
+   * the engine's proposed assignment for THIS slot (required participants
+   * first, then the least-loaded free pool members).
+   *
+   * Empty only for legacy fixed-panel calls to `generateSlots`, where the
+   * panel was already decided by the caller.
+   */
+  interviewerIds: string[];
+  interviewerNames: string[];
 }
 
 export interface RejectionReason {
@@ -88,11 +112,63 @@ export interface GenerateSlotsResult {
   rejections: RejectionReason[]; // aggregated, top reasons first
 }
 
-/** A.1 */
+/** A.1 — fixed-panel generation: EVERY participant given is required. */
 export declare function generateSlots(
   config: EngineConfig,
   participants: EngineParticipant[]
 ): GenerateSlotsResult;
+
+/**
+ * A.1b — POOL-BASED generation. This is the one the product actually uses.
+ *
+ * Interviewers are pooled by round-type label (a TECHNICAL round draws on the
+ * TECHNICAL pool). A slot is valid when the candidate, every REQUIRED
+ * participant, and at least `panelSize` members of the interchangeable pool are
+ * all free. The engine then assigns the least-loaded free pool members to that
+ * specific slot — so different slots may be covered by different people, and
+ * one interviewer being busy no longer kills a time that a colleague could take.
+ *
+ * @param candidate  the candidate participant (their submitted windows are the
+ *                   only source of candidate slots)
+ * @param pool       interchangeable, equally-qualified interviewers
+ * @param panelSize  how many of the pool must attend
+ * @param required   participants who must ALWAYS attend (e.g. the hiring
+ *                   manager), over and above the pool
+ */
+export declare function generateSlotsFromPool(
+  config: EngineConfig,
+  candidate: EngineParticipant,
+  pool: EngineParticipant[],
+  panelSize: number,
+  required?: EngineParticipant[]
+): GenerateSlotsResult;
+
+export interface FeasibleDaysResult {
+  /** Local day keys ("2026-03-09") IN THE CANDIDATE'S TIMEZONE, for days where
+   *  the panel could actually cover an interview. */
+  days: string[];
+  /** The timezone those day keys are expressed in — the UI must not re-interpret them. */
+  timezone: string;
+  /** Days inside the window that were checked and found unusable, with why.
+   *  Lets the UI explain a greyed-out day instead of just disabling it. */
+  blocked: { day: string; reason: string }[];
+}
+
+/**
+ * A.4 — which days can the candidate safely be offered?
+ *
+ * Runs before the candidate picks anything, so the booking UI can grey out days
+ * where no valid interview could be scheduled no matter what time they choose.
+ * A day qualifies when at least `panelSize` pool members (plus every required
+ * participant) have a duration-sized opening that day.
+ */
+export declare function computeFeasibleDays(
+  config: EngineConfig,
+  candidateTimezone: string,
+  pool: EngineParticipant[],
+  panelSize: number,
+  required?: EngineParticipant[]
+): FeasibleDaysResult;
 
 /** A.2 — re-check a single slot immediately before booking (logic doc §7 step 2) */
 export declare function validateSlot(
@@ -125,11 +201,22 @@ export interface SelectionInput {
 }
 
 export interface SelectionResult {
-  /** chosen panel, length ≤ panelSize */
+  /** The top `panelSize` of the pool — a PREVIEW of who would most likely run
+   *  this interview, shown to the recruiter at request-creation time. It is NOT
+   *  a binding assignment: the real assignment is made per-slot at booking time
+   *  (see `generateSlotsFromPool`). */
   selected: { id: string; name: string; reason: string }[];
+  /**
+   * THE POOL — every interviewer qualified for this round (correct label +
+   * required skills + some availability + under their cap), ranked
+   * least-loaded first. This is what slot generation draws on; any one of these
+   * people can cover the interview, so one being busy doesn't block a time.
+   */
+  pool: { id: string; name: string; reason: string; currentLoad: number; dailyLimit: number }[];
   /** everyone considered and why they lost — drives the UI's explainability panel */
   rejected: { id: string; name: string; reason: string }[];
-  /** true when selected.length < panelSize */
+  /** true when the POOL is smaller than panelSize — i.e. this round cannot be
+   *  staffed at all, not merely that a particular time is awkward. */
   insufficient: boolean;
 }
 
@@ -263,6 +350,7 @@ export interface PublicRequestDTO {
 //
 //  CANDIDATE (token in path, no auth)
 //  GET  /api/public/:token                                           → PublicRequestDTO
+//  GET  /api/public/:token/feasible-days                             → FeasibleDaysResult
 //  POST /api/public/:token/availability {windows:TimeWindow[]}       → {}
 //  GET  /api/public/:token/slots                                     → GenerateSlotsResult
 //  POST /api/public/:token/book      {startUtc,endUtc}               → BookingDTO

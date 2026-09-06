@@ -19,11 +19,16 @@ export function generateSlots(
     return { start: start.toISOString(), end: end.toISOString() };
   };
 
+  // NOTE (Role A, mechanical fix only — not a design change to this stub):
+  // GeneratedSlot picked up interviewerIds/interviewerNames as part of pool-based
+  // scheduling (see docs/12_CONTRACT_DIFF_POOL_BASED_SCHEDULING.md). Filled with
+  // an empty assignment here so the stub keeps compiling; update to something
+  // more realistic if you want the stub to exercise the "who's assigned" UI too.
   return {
     slots: [
-      { ...createSlot(10), score: 100, rank: 1, reasons: ["Optimal slot"] },
-      { ...createSlot(14), score: 80, rank: 2, reasons: ["Afternoon slot"] },
-      { ...createSlot(16), score: 60, rank: 3, reasons: ["Late afternoon slot"] }
+      { ...createSlot(10), score: 100, rank: 1, reasons: ["Optimal slot"], interviewerIds: [], interviewerNames: [] },
+      { ...createSlot(14), score: 80, rank: 2, reasons: ["Afternoon slot"], interviewerIds: [], interviewerNames: [] },
+      { ...createSlot(16), score: 60, rank: 3, reasons: ["Late afternoon slot"], interviewerIds: [], interviewerNames: [] }
     ],
     rejections: []
   };
@@ -54,9 +59,22 @@ export function pickPanel(
     reason: "Sufficient panel size reached"
   }));
 
+  // NOTE (Role A, mechanical fix only): SelectionResult.pool is new — see
+  // docs/12_CONTRACT_DIFF_POOL_BASED_SCHEDULING.md. Set to the same full
+  // qualified list `selected` was drawn from, since that's what "pool" means
+  // for the real implementation too.
+  const resultPool = available.map(c => ({
+    id: c.id,
+    name: c.name,
+    reason: "Mock pool membership",
+    currentLoad: c.currentLoad,
+    dailyLimit: c.dailyLimit,
+  }));
+
   return {
     selected,
+    pool: resultPool,
     rejected,
-    insufficient: selected.length < input.panelSize
+    insufficient: resultPool.length < input.panelSize
   };
 }

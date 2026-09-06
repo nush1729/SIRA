@@ -17,13 +17,23 @@
 import {
   EngineConfig,
   EngineParticipant,
+  FeasibleDaysResult,
   GeneratedSlot,
   GenerateSlotsResult,
   RejectionReason,
   SLOT_STEP_MIN,
   TimeWindow,
 } from "./contracts";
-import { formatLocal, formatLocalTime, localDayKey, localMinutesOfDay, sameLocalDay, withinWorkingHours } from "./tz";
+import {
+  enumerateLocalDays,
+  formatLocal,
+  formatLocalTime,
+  localDayKey,
+  localMinutesOfDay,
+  localWorkingHoursBoundsUtc,
+  sameLocalDay,
+  withinWorkingHours,
+} from "./tz";
 
 /** How many ranked slots `generateSlots` returns at most (docs §5: "top N (default 5)"). */
 const TOP_N = 5;
@@ -184,8 +194,33 @@ function evaluateSlot(
   return { valid, perParticipant };
 }
 
+/**
+ * One slot that passed every hard constraint, carrying everything `scoreSlots`
+ * needs: who would actually run it (`assignment`) and who was actually
+ * checked for comfort/edge-hours/workload scoring (`involved`) — which, for a
+ * pool-based slot, is NOT the same as "everyone in the pool," only the ones
+ * this particular slot would assign.
+ */
+interface ValidSlot {
+  slot: TimeWindow;
+  reasons: string[];
+  assignment: { ids: string[]; names: string[] };
+  involved: EngineParticipant[];
+}
+
+function loadOf(p: EngineParticipant): number {
+  return p.existingBookings?.length ?? p.currentLoad ?? 0;
+}
+
+function bumpRejection(counts: Map<string, RejectionReason>, participant: EngineParticipant, bucket: string): void {
+  const key = `${participant.id}::${bucket}`;
+  const existing = counts.get(key);
+  if (existing) existing.count += 1;
+  else counts.set(key, { participantId: participant.id, participantName: participant.name, reason: bucket, count: 1 });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// A.1 generateSlots
+// A.1 generateSlots — FIXED PANEL: every participant given is required
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -193,23 +228,23 @@ function evaluateSlot(
  * constraint for every required participant, scores them, and returns the
  * top-ranked ones — or, if none survive, the aggregated reasons why.
  *
+ * This is the FIXED-PANEL entry point: everyone in `participants` is required,
+ * for every slot, with no substitution. Prefer `generateSlotsFromPool` for the
+ * normal product flow (docs §3: interviewers are pooled by round label, and any
+ * one qualified pool member can cover a given slot) — this function still
+ * exists for cases with no interchangeable pool at all (e.g. a screening call
+ * with exactly one fixed screener) and is what `refineWindows` builds on.
+ *
  * @param config    Duration/buffer/working-hours/step. `config.window` is not
  *                   read directly by this function — slots are generated from
  *                   the candidate participant's OWN `availability` windows
  *                   (docs §4: "for window in request.availabilityWindows").
- *                   `config.window` exists in the contract for callers (e.g.
- *                   `pickPanel`'s coarse eligibility check) that need an overall
- *                   scheduling range before candidate windows exist yet.
  * @param participants Must include exactly one participant with `role: "candidate"`
- *                   (their `availability` is the source of every candidate slot)
  *                   plus every interviewer who must attend. Panel members who
- *                   have declined must already be filtered OUT by the caller —
- *                   this function treats every participant it's given as required.
+ *                   have declined must already be filtered OUT by the caller.
  *
  * @throws if `participants` contains no candidate, or if `durationMin`/`stepMin`
- *         is not a positive number — both are caller bugs, not valid scheduling
- *         outcomes, and failing loudly here is safer than silently returning an
- *         empty result (which would look identical to a legitimate "no overlap").
+ *         is not a positive number.
  */
 export function generateSlots(config: EngineConfig, participants: EngineParticipant[]): GenerateSlotsResult {
   const candidate = participants.find((p) => p.role === "candidate");
@@ -219,34 +254,21 @@ export function generateSlots(config: EngineConfig, participants: EngineParticip
 
   const stepMin = config.stepMin ?? SLOT_STEP_MIN;
   if (!(config.durationMin > 0) || !(stepMin > 0)) {
-    // A non-positive step would make the loop below never advance (infinite loop);
-    // a non-positive duration is nonsensical. Both are misuse, not "zero slots."
     throw new Error(`generateSlots: durationMin and stepMin must be positive (got durationMin=${config.durationMin}, stepMin=${stepMin}).`);
   }
 
   const stepMs = stepMin * 60_000;
   const durationMs = config.durationMin * 60_000;
 
-  // Candidate slots are only ever generated inside windows the candidate
-  // actually submitted. No windows submitted yet means there is nothing to
-  // generate against — that's a legitimate empty result (status AWAITING_AVAILABILITY),
-  // not an error, so it falls through to the normal empty-result path below.
-  //
-  // Each candidate window is also CLIPPED to the request's own scheduling window
-  // (`config.window`). The recruiter chose that date range; a candidate window
-  // that runs past it (a UI bug, a stale submission, or a tampered request)
-  // must not be able to schedule an interview outside the range the recruiter
-  // actually asked for. Windows entirely outside the range drop out here.
   const sourceWindows = candidate.availability
     .map((w) => intersect(w, config.window))
     .filter((w): w is TimeWindow => w !== null);
 
-  const candidates: { slot: TimeWindow; reasons: string[] }[] = [];
+  const fixedInterviewers = participants.filter((p) => p.role === "interviewer");
+  const fixedAssignment = { ids: fixedInterviewers.map((p) => p.id), names: fixedInterviewers.map((p) => p.name) };
+
+  const validSlots: ValidSlot[] = [];
   const rejectionCounts = new Map<string, RejectionReason>();
-  // Candidates may submit overlapping windows (e.g. "Mon 9-11" and "Mon 10-12"),
-  // which would otherwise yield the SAME slot twice — duplicated in the ranked
-  // list and double-counted in the rejection tallies. Track what we've already
-  // evaluated and skip repeats.
   const seenSlotStarts = new Set<string>();
 
   for (const window of sourceWindows) {
@@ -262,33 +284,134 @@ export function generateSlots(config: EngineConfig, participants: EngineParticip
       const { valid, perParticipant } = evaluateSlot(slot, config, participants);
 
       if (valid) {
-        candidates.push({ slot, reasons: perParticipant.map((p) => p.verdict.positiveReason!) });
+        validSlots.push({
+          slot,
+          reasons: perParticipant.map((p) => p.verdict.positiveReason!),
+          assignment: fixedAssignment,
+          involved: participants,
+        });
       } else {
-        // Bucket rejections by (participant, generic reason) so the count is
-        // meaningful — "Alex Rivera: at daily cap (12 slots)" tells a recruiter
-        // something; twelve separate timestamped strings would not.
         for (const { participant, verdict } of perParticipant) {
           if (verdict.ok) continue;
-          const key = `${participant.id}::${verdict.rejectionBucket}`;
-          const existing = rejectionCounts.get(key);
-          if (existing) {
-            existing.count += 1;
-          } else {
-            rejectionCounts.set(key, {
-              participantId: participant.id,
-              participantName: participant.name,
-              reason: verdict.rejectionBucket!,
-              count: 1,
-            });
-          }
+          bumpRejection(rejectionCounts, participant, verdict.rejectionBucket!);
         }
       }
     }
   }
 
-  const scored = scoreSlots(candidates, participants, sourceWindows);
+  const scored = scoreSlots(validSlots, sourceWindows);
   const ranked = rankSlots(scored);
+  const rejections = [...rejectionCounts.values()].sort((a, b) => b.count - a.count);
 
+  return { slots: ranked, rejections };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A.1b generateSlotsFromPool — POOL-BASED: the assignment is decided per-slot
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generates ranked slots against an INTERCHANGEABLE POOL of interviewers,
+ * assigning the least-loaded free `panelSize` of them to each valid slot
+ * individually. This is what makes "one interviewer is busy" stop being a
+ * scheduling failure — a colleague from the same round-type pool can cover it.
+ *
+ * For every candidate slot:
+ *   1. every REQUIRED participant (e.g. a hiring manager who must always
+ *      attend) must pass every hard constraint — if not, the slot is rejected
+ *      and every failing required participant is counted in `rejections[]`;
+ *   2. otherwise, every pool member is checked independently; if fewer than
+ *      `panelSize` are free, the slot is rejected and every failing pool
+ *      member is counted;
+ *   3. otherwise, the `panelSize` LEAST-LOADED free pool members are assigned
+ *      to that slot (ties broken by name) — different slots may end up with
+ *      different assigned people, which is the whole point.
+ *
+ * @throws if `candidate.role !== "candidate"`, or `panelSize`/`durationMin`/
+ *         `stepMin` is not positive.
+ */
+export function generateSlotsFromPool(
+  config: EngineConfig,
+  candidate: EngineParticipant,
+  pool: EngineParticipant[],
+  panelSize: number,
+  required: EngineParticipant[] = []
+): GenerateSlotsResult {
+  if (candidate.role !== "candidate") {
+    throw new Error("generateSlotsFromPool: `candidate` must have role 'candidate'.");
+  }
+  if (!(panelSize > 0)) {
+    throw new Error(`generateSlotsFromPool: panelSize must be positive (got ${panelSize}).`);
+  }
+  const stepMin = config.stepMin ?? SLOT_STEP_MIN;
+  if (!(config.durationMin > 0) || !(stepMin > 0)) {
+    throw new Error(`generateSlotsFromPool: durationMin and stepMin must be positive (got durationMin=${config.durationMin}, stepMin=${stepMin}).`);
+  }
+
+  const stepMs = stepMin * 60_000;
+  const durationMs = config.durationMin * 60_000;
+
+  const sourceWindows = candidate.availability
+    .map((w) => intersect(w, config.window))
+    .filter((w): w is TimeWindow => w !== null);
+
+  const requiredWithCandidate = [candidate, ...required];
+
+  const validSlots: ValidSlot[] = [];
+  const rejectionCounts = new Map<string, RejectionReason>();
+  const seenSlotStarts = new Set<string>();
+
+  for (const window of sourceWindows) {
+    const windowStartMs = Date.parse(window.start);
+    const windowEndMs = Date.parse(window.end);
+
+    for (let t = windowStartMs; t + durationMs <= windowEndMs; t += stepMs) {
+      const slot: TimeWindow = { start: new Date(t).toISOString(), end: new Date(t + durationMs).toISOString() };
+
+      if (seenSlotStarts.has(slot.start)) continue;
+      seenSlotStarts.add(slot.start);
+
+      // 1. Required participants (candidate + anyone who must always attend) —
+      //    no substitution possible for these, same as the fixed-panel path.
+      const requiredCheck = evaluateSlot(slot, config, requiredWithCandidate);
+      if (!requiredCheck.valid) {
+        for (const { participant, verdict } of requiredCheck.perParticipant) {
+          if (verdict.ok) continue;
+          bumpRejection(rejectionCounts, participant, verdict.rejectionBucket!);
+        }
+        continue;
+      }
+
+      // 2. Pool members are checked independently — one failing doesn't reject
+      //    the slot, it just removes that one person from consideration.
+      const poolVerdicts = pool.map((p) => ({ participant: p, verdict: evaluateParticipantAgainstSlot(p, slot, config) }));
+      const freePool = poolVerdicts.filter((v) => v.verdict.ok);
+
+      if (freePool.length < panelSize) {
+        for (const { participant, verdict } of poolVerdicts) {
+          if (verdict.ok) continue;
+          bumpRejection(rejectionCounts, participant, verdict.rejectionBucket!);
+        }
+        continue;
+      }
+
+      // 3. Assign the least-loaded free pool members — load balancing (#20)
+      //    applied per-slot, exactly like pickPanel applies it across the pool.
+      const assigned = [...freePool]
+        .sort((a, b) => loadOf(a.participant) - loadOf(b.participant) || a.participant.name.localeCompare(b.participant.name))
+        .slice(0, panelSize);
+
+      validSlots.push({
+        slot,
+        reasons: [...requiredCheck.perParticipant.map((p) => p.verdict.positiveReason!), ...assigned.map((a) => a.verdict.positiveReason!)],
+        assignment: { ids: assigned.map((a) => a.participant.id), names: assigned.map((a) => a.participant.name) },
+        involved: [...requiredWithCandidate, ...assigned.map((a) => a.participant)],
+      });
+    }
+  }
+
+  const scored = scoreSlots(validSlots, sourceWindows);
+  const ranked = rankSlots(scored);
   const rejections = [...rejectionCounts.values()].sort((a, b) => b.count - a.count);
 
   return { slots: ranked, rejections };
@@ -375,6 +498,8 @@ interface ScoredCandidate {
   slot: TimeWindow;
   reasons: string[];
   score: number;
+  /** Who the engine proposes to run this specific slot (see GeneratedSlot). */
+  assignment: { ids: string[]; names: string[] };
 }
 
 /**
@@ -393,11 +518,7 @@ interface ScoredCandidate {
  * but not by which one the candidate picked first), this bonus would attach to
  * the wrong window. Flag this to D during integration if it isn't already true.
  */
-function scoreSlots(
-  valid: { slot: TimeWindow; reasons: string[] }[],
-  participants: EngineParticipant[],
-  candidateWindows: TimeWindow[]
-): ScoredCandidate[] {
+function scoreSlots(valid: ValidSlot[], candidateWindows: TimeWindow[]): ScoredCandidate[] {
   if (valid.length === 0) return [];
 
   const firstChoiceWindow = candidateWindows[0];
@@ -405,16 +526,7 @@ function scoreSlots(
   const rangeEnd = Math.max(...candidateWindows.map((w) => Date.parse(w.end)));
   const rangeSpan = Math.max(rangeEnd - rangeStart, 1); // guard against /0 when there's a single zero-length window
 
-  // Workload-balance term: see the doc comment on countBookingsOnLocalDay above —
-  // this assumes existingBookings is already scoped to something like "this
-  // interviewer's bookings in the relevant window," not their entire history.
-  const interviewers = participants.filter((p) => p.role === "interviewer");
-  const avgPanelLoad =
-    interviewers.length > 0
-      ? interviewers.reduce((sum, p) => sum + (p.existingBookings?.length ?? 0), 0) / interviewers.length
-      : 0;
-
-  return valid.map(({ slot, reasons }) => {
+  return valid.map(({ slot, reasons, assignment, involved }) => {
     let score = 0;
 
     const withinFirstChoice =
@@ -426,21 +538,27 @@ function scoreSlots(
     const position = (Date.parse(slot.start) - rangeStart) / rangeSpan;
     score += SCORE_EARLIEST_IN_RANGE_MAX * (1 - Math.min(Math.max(position, 0), 1));
 
-    const allComfortable = participants.every((p) => {
+    // Comfort/edge-hours/workload are all scoped to `involved` — the people
+    // THIS slot actually assigns, not the whole pool. A pool member who isn't
+    // covering this particular slot shouldn't affect its score (docs assumption
+    // documented in generateSlotsFromPool above).
+    const allComfortable = involved.every((p) => {
       const minutes = localMinutesOfDay(slot.start, p.timezone);
       return minutes >= COMFORTABLE_HOURS_START_MIN && minutes <= COMFORTABLE_HOURS_END_MIN;
     });
     if (allComfortable) score += SCORE_COMFORTABLE_HOURS;
 
-    score += SCORE_WORKLOAD_BALANCE_BASE / (1 + avgPanelLoad);
+    const involvedInterviewers = involved.filter((p) => p.role === "interviewer");
+    const avgLoad = involvedInterviewers.length > 0 ? involvedInterviewers.reduce((sum, p) => sum + loadOf(p), 0) / involvedInterviewers.length : 0;
+    score += SCORE_WORKLOAD_BALANCE_BASE / (1 + avgLoad);
 
-    const anyEdgeHours = participants.some((p) => {
+    const anyEdgeHours = involved.some((p) => {
       const minutes = localMinutesOfDay(slot.start, p.timezone);
       return minutes < EDGE_HOURS_START_MIN || minutes > EDGE_HOURS_END_MIN;
     });
     if (anyEdgeHours) score += SCORE_EDGE_HOURS_PENALTY;
 
-    return { slot, reasons, score: Math.round(score * 100) / 100 };
+    return { slot, reasons, score: Math.round(score * 100) / 100, assignment };
   });
 }
 
@@ -453,5 +571,109 @@ export function rankSlots(scored: ScoredCandidate[]): GeneratedSlot[] {
   return [...scored]
     .sort((a, b) => b.score - a.score)
     .slice(0, TOP_N)
-    .map((s, index) => ({ start: s.slot.start, end: s.slot.end, score: s.score, rank: index + 1, reasons: s.reasons }));
+    .map((s, index) => ({
+      start: s.slot.start,
+      end: s.slot.end,
+      score: s.score,
+      rank: index + 1,
+      reasons: s.reasons,
+      interviewerIds: s.assignment.ids,
+      interviewerNames: s.assignment.names,
+    }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A.4 computeFeasibleDays — which candidate-local days can even be offered?
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * For each local calendar day (in the CANDIDATE'S timezone) inside
+ * `config.window`, checks whether at least `panelSize` pool members (plus
+ * every required participant, plus the candidate's own working hours) could
+ * cover a duration-sized slot that day. Runs BEFORE the candidate has
+ * submitted any availability — this is what lets the "pick a day" screen grey
+ * out days that could never work, per docs §1/§15.
+ *
+ * A synthetic candidate participant (working hours only, no busy/skills) is
+ * included in the required check so a day isn't marked feasible on the
+ * strength of a 2am slot the candidate could never actually pick either.
+ *
+ * @throws if `panelSize`/`durationMin`/`stepMin` is not positive.
+ */
+export function computeFeasibleDays(
+  config: EngineConfig,
+  candidateTimezone: string,
+  pool: EngineParticipant[],
+  panelSize: number,
+  required: EngineParticipant[] = []
+): FeasibleDaysResult {
+  if (!(panelSize > 0)) {
+    throw new Error(`computeFeasibleDays: panelSize must be positive (got ${panelSize}).`);
+  }
+  const stepMin = config.stepMin ?? SLOT_STEP_MIN;
+  if (!(config.durationMin > 0) || !(stepMin > 0)) {
+    throw new Error(`computeFeasibleDays: durationMin and stepMin must be positive (got durationMin=${config.durationMin}, stepMin=${stepMin}).`);
+  }
+
+  const stepMs = stepMin * 60_000;
+  const durationMs = config.durationMin * 60_000;
+
+  const candidateProxy: EngineParticipant = {
+    id: "__candidate_proxy__",
+    name: "Candidate",
+    role: "candidate",
+    timezone: candidateTimezone,
+    availability: [],
+    busy: [],
+  };
+  const requiredWithCandidate = [candidateProxy, ...required];
+
+  const days: string[] = [];
+  const blocked: { day: string; reason: string }[] = [];
+
+  for (const dayKey of enumerateLocalDays(config.window, candidateTimezone)) {
+    // Scan only the candidate's own working-hours sub-window for this day, not
+    // the full 24 hours — see the doc comment on localWorkingHoursBoundsUtc for
+    // why scanning the whole day would silently mislabel the blocking reason.
+    const workingHoursBoundsUtc = localWorkingHoursBoundsUtc(dayKey, candidateTimezone, config.workingHoursStart, config.workingHoursEnd);
+    const searchWindow = intersect(workingHoursBoundsUtc, config.window);
+    if (!searchWindow) {
+      blocked.push({ day: dayKey, reason: "outside the requested date range" });
+      continue;
+    }
+
+    const dayRejectionCounts = new Map<string, number>();
+    let feasible = false;
+
+    const startMs = Date.parse(searchWindow.start);
+    const endMs = Date.parse(searchWindow.end);
+
+    for (let t = startMs; t + durationMs <= endMs; t += stepMs) {
+      const slot: TimeWindow = { start: new Date(t).toISOString(), end: new Date(t + durationMs).toISOString() };
+
+      const requiredCheck = evaluateSlot(slot, config, requiredWithCandidate);
+      if (!requiredCheck.valid) {
+        for (const { verdict } of requiredCheck.perParticipant) {
+          if (!verdict.ok) dayRejectionCounts.set(verdict.rejectionBucket!, (dayRejectionCounts.get(verdict.rejectionBucket!) ?? 0) + 1);
+        }
+        continue;
+      }
+
+      const freeCount = pool.filter((p) => evaluateParticipantAgainstSlot(p, slot, config).ok).length;
+      if (freeCount >= panelSize) {
+        feasible = true;
+        break;
+      }
+      dayRejectionCounts.set("not enough of the panel free", (dayRejectionCounts.get("not enough of the panel free") ?? 0) + 1);
+    }
+
+    if (feasible) {
+      days.push(dayKey);
+    } else {
+      const topReason = [...dayRejectionCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "no valid time found";
+      blocked.push({ day: dayKey, reason: topReason });
+    }
+  }
+
+  return { days, timezone: candidateTimezone, blocked };
 }

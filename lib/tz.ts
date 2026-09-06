@@ -83,3 +83,49 @@ export function localMinutesOfDay(utcIso: string, tz: string): number {
   const dt = toLocal(utcIso, tz);
   return dt.hour * 60 + dt.minute;
 }
+
+/**
+ * The UTC bounds of one local calendar day, e.g. `localDayBoundsUtc("2026-03-09", "Asia/Kolkata")`
+ * → { start: 2026-03-08T18:30:00Z, end: 2026-03-09T18:30:00Z }. Used by
+ * `computeFeasibleDays` (scheduler.ts) to search day-by-day in the CANDIDATE'S
+ * timezone, since "which days work" only means something in one specific zone —
+ * a day boundary in UTC would silently be wrong by hours for most candidates.
+ */
+export function localDayBoundsUtc(localDayKeyStr: string, tz: string): { start: string; end: string } {
+  const startOfDay = DateTime.fromISO(localDayKeyStr, { zone: tz }).startOf("day");
+  return { start: startOfDay.toUTC().toISO()!, end: startOfDay.plus({ days: 1 }).toUTC().toISO()! };
+}
+
+/**
+ * The UTC bounds of the WORKING-HOURS sub-window (e.g. 09:00-18:00) of one
+ * local calendar day. Used to scan for feasibility only within hours a
+ * candidate could plausibly be offered, rather than the full 24-hour day —
+ * scanning the whole day would waste the vast majority of steps on instants no
+ * candidate would ever accept anyway, and worse, would make "outside working
+ * hours" numerically dominate any other rejection reason simply by step count,
+ * masking a real blocker like "the whole panel is booked" (see
+ * `computeFeasibleDays` in scheduler.ts).
+ */
+export function localWorkingHoursBoundsUtc(localDayKeyStr: string, tz: string, start: string, end: string): { start: string; end: string } {
+  const day = DateTime.fromISO(localDayKeyStr, { zone: tz }).startOf("day");
+  const [startHour, startMinute] = start.split(":").map(Number);
+  const [endHour, endMinute] = end.split(":").map(Number);
+  return {
+    start: day.set({ hour: startHour, minute: startMinute }).toUTC().toISO()!,
+    end: day.set({ hour: endHour, minute: endMinute }).toUTC().toISO()!,
+  };
+}
+
+/**
+ * Every local calendar-day key a UTC window touches, in the given timezone.
+ * Used to walk a scheduling window one candidate-local day at a time.
+ */
+export function enumerateLocalDays(window: TimeWindow, tz: string): string[] {
+  const startDay = toLocal(window.start, tz).startOf("day");
+  const endDay = toLocal(window.end, tz).startOf("day");
+  const days: string[] = [];
+  for (let cursor = startDay; cursor <= endDay; cursor = cursor.plus({ days: 1 })) {
+    days.push(cursor.toFormat("yyyy-LL-dd"));
+  }
+  return days;
+}

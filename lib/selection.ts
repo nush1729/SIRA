@@ -59,7 +59,7 @@ function hasAnyFreeTimeInWindow(candidate: SelectionCandidate, window: TimeWindo
 }
 
 /**
- * A.3 — picks the interview panel. Implements docs/01_LOGIC_FLOW.md §3.
+ * A.3 — computes the round-type interviewer POOL. Implements docs/01_LOGIC_FLOW.md §3.
  *
  * Filters run in a STRICT order, and the order is the point:
  *   label matches round → has every required skill → has any free time in the
@@ -69,6 +69,14 @@ function hasAnyFreeTimeInWindow(candidate: SelectionCandidate, window: TimeWindo
  * passed every qualification filter, which is what makes "fairness never
  * overrides qualification" true by construction rather than by convention — an
  * idle but unqualified interviewer is gone before the sort ever runs.
+ *
+ * IMPORTANT — pool, not a binding assignment: `result.pool` is every qualified
+ * interviewer (the whole TECHNICAL/MANAGERIAL/SCREENING/HR pool for this
+ * round), ranked least-loaded first. `result.selected` is just its top
+ * `panelSize`, shown to the recruiter as a preview at request-creation time —
+ * it does NOT reserve those people. The actual assignment is decided per-slot,
+ * later, by `generateSlotsFromPool` (scheduler.ts), which is what lets one
+ * pool member being busy get covered by another instead of killing the slot.
  *
  * Everyone filtered out lands in `rejected[]` with a sentence a recruiter can
  * read. That array is a product feature (it drives the UI's "why wasn't X
@@ -127,11 +135,24 @@ export function pickPanel(input: SelectionInput, pool: SelectionCandidate[]): Se
   // overrides qualification; this sort never runs on the rejected pool.
   const sorted = [...working].sort((a, b) => a.currentLoad - b.currentLoad || a.name.localeCompare(b.name));
 
+  // `pool` = EVERY qualified interviewer, ranked least-loaded first — this is
+  // the round-type pool (docs: "interviewers are pooled by round type") that
+  // generateSlotsFromPool draws on. `selected` is just its top panelSize, kept
+  // for the recruiter's request-creation preview — it is NOT a binding
+  // assignment; the real per-slot assignment happens at booking time.
+  const poolResult = sorted.map((c) => ({
+    id: c.id,
+    name: c.name,
+    reason: `qualified · load ${c.currentLoad}/${c.dailyLimit}`,
+    currentLoad: c.currentLoad,
+    dailyLimit: c.dailyLimit,
+  }));
+
   const selected = sorted.slice(0, input.panelSize).map((c) => ({
     id: c.id,
     name: c.name,
     reason: `selected · load ${c.currentLoad}/${c.dailyLimit}`,
   }));
 
-  return { selected, rejected, insufficient: selected.length < input.panelSize };
+  return { selected, pool: poolResult, rejected, insufficient: poolResult.length < input.panelSize };
 }
