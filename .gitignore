@@ -35,3 +35,6 @@ coverage/
 
 # typescript build artifacts
 *.tsbuildinfo
+
+# next.js typescript build info
+tsconfig.tsbuildinfo

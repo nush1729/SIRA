@@ -13,7 +13,16 @@
 // 1. DOMAIN ENUMS (mirrored exactly in prisma/schema.prisma — B keeps them in sync)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type Role = "RECRUITER" | "INTERVIEWER" | "HIRING_MANAGER" | "ADMIN";
+/**
+ * Three roles only.
+ *   ADMIN       — schedules everything; the only role that can create requests
+ *                 or book slots.
+ *   INTERVIEWER — sits on panels, accepts/declines, sees their own calendar.
+ *   candidate   — has no account and therefore no Role: they act through a
+ *                 scoped token link (`PublicRequestDTO`). Listed here as a
+ *                 comment so nobody adds it back as a login role.
+ */
+export type Role = "ADMIN" | "INTERVIEWER";
 export type RoundType = "SCREENING" | "TECHNICAL" | "MANAGERIAL" | "HR";
 export type ReqStatus =
   | "DRAFT"
@@ -288,6 +297,29 @@ export interface BookingDTO {
   meetLink: string | null;
 }
 
+/** Where an interviewer's calendar is being read from. */
+export type CalendarSource = "mock" | "google";
+
+export interface CalendarEventDTO {
+  id: string;
+  title: string;
+  startUtc: string;
+  endUtc: string;
+  /** BUSY = an existing block scheduling must avoid. INTERVIEW = a SIRA booking. */
+  kind: "BUSY" | "INTERVIEW";
+}
+
+export interface CalendarDTO {
+  source: CalendarSource;
+  /** false ⇒ render the connect prompt, not an empty week. */
+  connected: boolean;
+  /** e.g. "priya_tech@group.calendar.google.com", or null when not connected. */
+  accountLabel: string | null;
+  /** IANA zone the events should be rendered in — the viewer's own. */
+  timezone: string;
+  events: CalendarEventDTO[];
+}
+
 export interface NotificationDTO {
   id: string;
   toEmail: string;
@@ -346,6 +378,7 @@ export interface PublicRequestDTO {
 //  POST /api/requests/:id/cancel     {reason?}                       → {}
 //  POST /api/requests/:id/reschedule {reason?}                       → RescheduleOutcome
 //  GET  /api/assignments/mine                                        → AssignmentDTO[]
+//  GET  /api/calendar/mine           ?source=mock|google             → CalendarDTO
 //  POST /api/assignments/:id/respond {action:"ACCEPT"|"DECLINE", reason?} → RescheduleOutcome
 //
 //  CANDIDATE (token in path, no auth)
