@@ -97,14 +97,14 @@ export const DEMO_PASSWORD = "demo1234";
 
 export const sessions: (SessionDTO & { password: string })[] = [
   // ADMIN — the only role that can create requests or book slots.
-  { id: "u_jordan", name: "Jordan Lee", email: "demo+jordan@sira.app", role: "ADMIN", timezone: LDN, password: DEMO_PASSWORD },
+  { id: "u_jordan", name: "Jordan Lee", email: "jordan@example.com", role: "ADMIN", timezone: LDN, password: DEMO_PASSWORD },
   // INTERVIEWER — panels, accept/decline, own calendar.
-  { id: "u_vikram", name: "Vikram Rao", email: "demo+vikram@sira.app", role: "INTERVIEWER", timezone: IST, password: DEMO_PASSWORD },
-  { id: "u_alex", name: "Alex Rivera", email: "demo+alex@sira.app", role: "INTERVIEWER", timezone: NY, password: DEMO_PASSWORD },
-  { id: "u_priya", name: "Priya Sharma", email: "demo+priya@sira.app", role: "INTERVIEWER", timezone: IST, password: DEMO_PASSWORD },
-  { id: "u_rahul", name: "Rahul Verma", email: "demo+rahul@sira.app", role: "INTERVIEWER", timezone: IST, password: DEMO_PASSWORD },
-  { id: "u_ananya", name: "Ananya Patel", email: "demo+ananya@sira.app", role: "INTERVIEWER", timezone: IST, password: DEMO_PASSWORD },
-  { id: "u_admin", name: "Admin", email: "demo+admin@sira.app", role: "ADMIN", timezone: IST, password: DEMO_PASSWORD },
+  { id: "u_vikram", name: "Vikram Rao", email: "vikram@example.com", role: "INTERVIEWER", timezone: IST, password: DEMO_PASSWORD },
+  { id: "u_alex", name: "Alex Rivera", email: "alex@example.com", role: "INTERVIEWER", timezone: NY, password: DEMO_PASSWORD },
+  { id: "u_priya", name: "Priya Sharma", email: "priya@example.com", role: "INTERVIEWER", timezone: IST, password: DEMO_PASSWORD },
+  { id: "u_rahul", name: "Rahul Verma", email: "rahul@example.com", role: "INTERVIEWER", timezone: IST, password: DEMO_PASSWORD },
+  { id: "u_ananya", name: "Ananya Patel", email: "ananya@example.com", role: "INTERVIEWER", timezone: IST, password: DEMO_PASSWORD },
+  { id: "u_admin", name: "Admin", email: "admin@example.com", role: "ADMIN", timezone: IST, password: DEMO_PASSWORD },
 ];
 
 export const demoLogins: { email: string; role: Role; password: string }[] = sessions.map((s) => ({
@@ -118,14 +118,14 @@ export const demoLogins: { email: string; role: Role; password: string }[] = ses
  * ------------------------------------------------------------------------ */
 
 export const candidates: Record<string, CandidateDTO> = {
-  dev: { id: "c_dev", name: "Dev Menon", email: "demo+dev@sira.app", timezone: NY },
-  maya: { id: "c_maya", name: "Maya Iyer", email: "demo+maya@sira.app", timezone: IST },
-  carlos: { id: "c_carlos", name: "Carlos Mendes", email: "demo+carlos@sira.app", timezone: LA },
-  sophia: { id: "c_sophia", name: "Sophia Reddy", email: "demo+sophia@sira.app", timezone: IST },
-  ethan: { id: "c_ethan", name: "Ethan Blake", email: "demo+ethan@sira.app", timezone: LDN },
-  chloe: { id: "c_chloe", name: "Chloe Fernandes", email: "demo+chloe@sira.app", timezone: IST },
-  ryan: { id: "c_ryan", name: "Ryan Cole", email: "demo+ryan@sira.app", timezone: IST },
-  nikhil: { id: "c_nikhil", name: "Nikhil Rao", email: "demo+nikhil@sira.app", timezone: IST },
+  dev: { id: "c_dev", name: "Dev Menon", email: "dev@example.com", timezone: NY },
+  maya: { id: "c_maya", name: "Maya Iyer", email: "maya@example.com", timezone: IST },
+  carlos: { id: "c_carlos", name: "Carlos Mendes", email: "carlos@example.com", timezone: LA },
+  sophia: { id: "c_sophia", name: "Sophia Reddy", email: "sophia@example.com", timezone: IST },
+  ethan: { id: "c_ethan", name: "Ethan Blake", email: "ethan@example.com", timezone: LDN },
+  chloe: { id: "c_chloe", name: "Chloe Fernandes", email: "chloe@example.com", timezone: IST },
+  ryan: { id: "c_ryan", name: "Ryan Cole", email: "ryan@example.com", timezone: IST },
+  nikhil: { id: "c_nikhil", name: "Nikhil Rao", email: "nikhil@example.com", timezone: IST },
 };
 
 /* ---------------------------------------------------------------------------
@@ -179,7 +179,7 @@ export const requestDetails: Record<string, RequestDetailDTO> = {
       },
     ],
     notifications: [
-      notif("demo+dev@sira.app", "Share your availability — Product Engineer screening", "availability_request", 96),
+      notif("dev@example.com", "Share your availability — Product Engineer screening", "availability_request", 96),
     ],
     candidateLink: "/s/demo-dev",
   },
@@ -214,8 +214,8 @@ export const requestDetails: Record<string, RequestDetailDTO> = {
       },
     ],
     notifications: [
-      notif("demo+maya@sira.app", "Share your availability — Sr Backend Engineer", "availability_request", 91),
-      notif("demo+jordan@sira.app", "Maya Iyer submitted availability", "availability_submitted", 86),
+      notif("maya@example.com", "Share your availability — Sr Backend Engineer", "availability_request", 91),
+      notif("jordan@example.com", "Maya Iyer submitted availability", "availability_submitted", 86),
     ],
     candidateLink: "/s/demo-maya",
   },
@@ -250,8 +250,8 @@ export const requestDetails: Record<string, RequestDetailDTO> = {
       },
     ],
     notifications: [
-      notif("demo+carlos@sira.app", "Share your availability — Platform Engineer", "availability_request", 81),
-      notif("demo+alex@sira.app", "You have been added to a panel — Carlos Mendes", "panel_assigned", 76),
+      notif("carlos@example.com", "Share your availability — Platform Engineer", "availability_request", 81),
+      notif("alex@example.com", "You have been added to a panel — Carlos Mendes", "panel_assigned", 76),
     ],
     candidateLink: "/s/demo-carlos",
   },
@@ -292,8 +292,8 @@ export const requestDetails: Record<string, RequestDetailDTO> = {
       },
     ],
     notifications: [
-      notif("demo+sophia@sira.app", "Your interview is confirmed — Thu 3:00 PM IST", "booking_confirmed", 71),
-      notif("demo+priya@sira.app", "Interview scheduled — Sophia Reddy", "interviewer_booked", 66),
+      notif("sophia@example.com", "Your interview is confirmed — Thu 3:00 PM IST", "booking_confirmed", 71),
+      notif("priya@example.com", "Interview scheduled — Sophia Reddy", "interviewer_booked", 66),
     ],
     candidateLink: "/s/demo-sophia",
   },
@@ -328,8 +328,8 @@ export const requestDetails: Record<string, RequestDetailDTO> = {
       },
     ],
     notifications: [
-      notif("demo+ethan@sira.app", "Share your availability — Solutions Engineer", "availability_request", 61),
-      notif("demo+jordan@sira.app", "Ethan Blake submitted availability", "availability_submitted", 56),
+      notif("ethan@example.com", "Share your availability — Solutions Engineer", "availability_request", 61),
+      notif("jordan@example.com", "Ethan Blake submitted availability", "availability_submitted", 56),
     ],
     candidateLink: "/s/demo-ethan",
   },
@@ -367,8 +367,8 @@ export const requestDetails: Record<string, RequestDetailDTO> = {
       },
     ],
     notifications: [
-      notif("demo+chloe@sira.app", "Your interview is confirmed — Wed 11:00 AM IST", "booking_confirmed", 51),
-      notif("demo+ananya@sira.app", "Interview scheduled — Chloe Fernandes", "interviewer_booked", 46),
+      notif("chloe@example.com", "Your interview is confirmed — Wed 11:00 AM IST", "booking_confirmed", 51),
+      notif("ananya@example.com", "Interview scheduled — Chloe Fernandes", "interviewer_booked", 46),
     ],
     candidateLink: "/s/demo-chloe",
   },
@@ -404,9 +404,9 @@ export const requestDetails: Record<string, RequestDetailDTO> = {
       },
     ],
     notifications: [
-      notif("demo+ryan@sira.app", "Your interview is confirmed — Tue 4:00 PM IST", "booking_confirmed", 41),
-      notif("demo+ryan@sira.app", "We need to find a new time for your interview", "reschedule_required_candidate", 36),
-      notif("demo+jordan@sira.app", "Action needed — Ryan Cole has no remaining options", "reschedule_required_recruiter", 31),
+      notif("ryan@example.com", "Your interview is confirmed — Tue 4:00 PM IST", "booking_confirmed", 41),
+      notif("ryan@example.com", "We need to find a new time for your interview", "reschedule_required_candidate", 36),
+      notif("jordan@example.com", "Action needed — Ryan Cole has no remaining options", "reschedule_required_recruiter", 31),
     ],
     candidateLink: "/s/demo-ryan",
   },
@@ -447,9 +447,9 @@ export const requestDetails: Record<string, RequestDetailDTO> = {
       },
     ],
     notifications: [
-      notif("demo+nikhil@sira.app", "Your interview is confirmed — Fri 10:00 AM IST", "booking_confirmed", 26),
-      notif("demo+priya@sira.app", "Interview scheduled — Nikhil Rao", "interviewer_booked", 21),
-      notif("demo+nikhil@sira.app", "Your interview has moved to Fri 2:00 PM IST", "interview_moved", 16),
+      notif("nikhil@example.com", "Your interview is confirmed — Fri 10:00 AM IST", "booking_confirmed", 26),
+      notif("priya@example.com", "Interview scheduled — Nikhil Rao", "interviewer_booked", 21),
+      notif("nikhil@example.com", "Your interview has moved to Fri 2:00 PM IST", "interview_moved", 16),
     ],
     candidateLink: "/s/demo-nikhil",
   },

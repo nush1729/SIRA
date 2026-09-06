@@ -29,17 +29,34 @@ export async function GET(req: Request) {
     const from = new Date(Date.now() - 7 * 86_400_000);
     const to = new Date(Date.now() + 21 * 86_400_000);
 
-    const adapter = getCalendarAdapter();
     const calendarId = me.calendarId || me.email;
-    const busy = await adapter.getBusy(calendarId, from, to);
 
-    const events: CalendarEventDTO[] = busy.map((b, i) => ({
-      id: `busy_${i}_${b.start.getTime()}`,
-      title: 'Busy',
-      startUtc: b.start.toISOString(),
-      endUtc: b.end.toISOString(),
-      kind: 'BUSY',
-    }));
+    /* CalendarAdapter.getBusy returns times only — right for scheduling, but
+     * this is the person's own calendar, where "Lunch" is more use than
+     * "Busy". In mock mode read the titled rows; in google mode fall back to
+     * free/busy, which is all the API exposes without a fuller read scope. */
+    let events: CalendarEventDTO[];
+    if (process.env.PROVIDER_MODE === 'google') {
+      const busy = await getCalendarAdapter().getBusy(calendarId, from, to);
+      events = busy.map((b, i) => ({
+        id: `busy_${i}_${b.start.getTime()}`,
+        title: 'Busy',
+        startUtc: b.start.toISOString(),
+        endUtc: b.end.toISOString(),
+        kind: 'BUSY',
+      }));
+    } else {
+      const rows = await prisma.calendarBusy.findMany({
+        where: { calendarId, startUtc: { lt: to }, endUtc: { gt: from } },
+      });
+      events = rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        startUtc: r.startUtc.toISOString(),
+        endUtc: r.endUtc.toISOString(),
+        kind: 'BUSY',
+      }));
+    }
 
     // Confirmed interviews this person is still expected to attend.
     const assignments = await prisma.panelAssignment.findMany({

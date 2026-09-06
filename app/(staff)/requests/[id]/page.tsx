@@ -292,15 +292,19 @@ export default function RequestDetailPage() {
       {/* -- 1. Panel -------------------------------------------------------- */}
       <Card
         title="Panel"
-        subtitle={`${activePanel} of ${detail.panelSize} seat${
-          detail.panelSize === 1 ? "" : "s"
-        } filled · why each person was picked`}
+        subtitle={
+          activePanel === 0
+            ? "Chosen at booking time from the qualified pool"
+            : `${activePanel} of ${detail.panelSize} seat${
+                detail.panelSize === 1 ? "" : "s"
+              } filled · why each person was picked`
+        }
       >
         {detail.panel.length === 0 ? (
           <EmptyState
             icon="👥"
-            title="No panel selected yet"
-            body="No interviewer passed the label and skill filters for this round."
+            title="Assigned when you book"
+            body="SIRA draws on the whole qualified pool and assigns whoever is free for the time you pick — each slot below names the person who would run it."
           />
         ) : (
           <ul className="grid gap-3 lg:grid-cols-2">

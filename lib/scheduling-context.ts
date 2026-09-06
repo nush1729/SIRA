@@ -92,7 +92,9 @@ export async function buildPool(request: RequestRow): Promise<EngineParticipant[
         requestId: { not: request.id },
       },
     },
+    include: { booking: true },
   });
+  const bookingStarts = new Map(booked.map((b) => [b.bookingId, b.booking.startUtc]));
 
   // Older bookings predate BookingAssignment (seeded, or booked before this
   // release), so fall back to the panel for those.
@@ -100,6 +102,7 @@ export async function buildPool(request: RequestRow): Promise<EngineParticipant[
     where: {
       interviewerId: { in: interviewers.map((u) => u.id) },
       requestId: { not: request.id },
+      status: { not: 'DECLINED' },
       request: {
         bookings: {
           some: {
@@ -109,11 +112,37 @@ export async function buildPool(request: RequestRow): Promise<EngineParticipant[
         },
       },
     },
+    include: { request: { include: { bookings: { where: { status: 'CONFIRMED' } } } } },
   });
+  const alreadyCounted = new Set(booked.map((b) => `${b.interviewerId}:${b.bookingId}`));
+  const legacyStarts = legacy.flatMap((a) =>
+    a.request.bookings
+      .filter((b) => !alreadyCounted.has(`${a.interviewerId}:${b.id}`))
+      .map((b) => ({ interviewerId: a.interviewerId, startUtc: b.startUtc }))
+  );
+
+  /* `currentLoad` is a single number but `dailyLimit` is a DAILY cap, so the
+   * honest scalar is the person's load on their QUIETEST day in the window:
+   * if they are under cap on any day, they belong in the pool, and the engine
+   * then rejects the specific days where they are full. Taking the total
+   * instead capped Alex across a whole week for two Monday bookings. */
+  const bookingsById = new Map<string, Date[]>();
+  const push = (id: string, when: Date) => bookingsById.set(id, [...(bookingsById.get(id) ?? []), when]);
+  booked.forEach((b) => push(b.interviewerId, bookingStarts.get(b.bookingId) as Date));
+  legacyStarts.forEach(({ interviewerId, startUtc }) => push(interviewerId, startUtc));
+
+  const windowDays: string[] = [];
+  for (let t = request.windowStart.getTime(); t < request.windowEnd.getTime(); t += 86_400_000) {
+    windowDays.push(new Date(t).toISOString().slice(0, 10));
+  }
 
   const loadFor = (id: string) => {
-    const fromBookings = booked.filter((b) => b.interviewerId === id).length;
-    return fromBookings > 0 ? fromBookings : legacy.filter((a) => a.interviewerId === id).length;
+    const days = bookingsById.get(id) ?? [];
+    if (!windowDays.length) return days.length;
+    const perDay = windowDays.map(
+      (d) => days.filter((x) => x.toISOString().slice(0, 10) === d).length
+    );
+    return Math.min(...perDay);
   };
 
   const candidates: SelectionCandidate[] = interviewers.map((u) => ({

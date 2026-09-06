@@ -94,7 +94,10 @@ export async function runSeed() {
     prisma.user.create({
       data: {
         email: 'alex@example.com', name: 'Alex Rivera', role: 'INTERVIEWER', passwordHash, timezone: NY,
-        calendarId: 'alex_tech', labels: 'TECHNICAL,MANAGERIAL', skills: 'Java,Backend,Go,Leadership', dailyLimit: 2,
+        // SCREENING moved here with Jordan's promotion to ADMIN — he is the
+        // only interviewer with any working-hours overlap with New York.
+        calendarId: 'alex_tech', labels: 'TECHNICAL,MANAGERIAL,SCREENING',
+        skills: 'Java,Backend,Go,Leadership,Screening,Sourcing', dailyLimit: 2,
       },
     }),
     prisma.user.create({
@@ -282,7 +285,7 @@ export async function runSeed() {
 
   // Alex carries two prior bookings Mon+Tue so his load reads 2/2 and the
   // load-balancing story in S2 has something to actually balance against.
-  for (const [i, d] of [0, 1].entries()) {
+  for (const [i, d] of [0, 0, 1, 1].entries()) {
     const filler = await prisma.candidate.create({
       data: { name: `Prior Candidate ${i + 1}`, email: `prior${i + 1}@example.com`, timezone: NY },
     });
@@ -298,7 +301,7 @@ export async function runSeed() {
     });
     await prisma.booking.create({
       data: {
-        requestId: fillerReq.id, startUtc: at(d, 10, 0, NY), endUtc: at(d, 11, 0, NY),
+        requestId: fillerReq.id, startUtc: at(d, i % 2 === 0 ? 10 : 15, 0, NY), endUtc: at(d, i % 2 === 0 ? 11 : 16, 0, NY),
         activeKey: fillerReq.id, meetLink: `https://meet.google.com/mock-prior-${i + 1}`,
       },
     });
