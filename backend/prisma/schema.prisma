@@ -1,0 +1,436 @@
+// Prisma schema for the Smart Interview Scheduler.
+// Mirrors smart-interview-scheduler-architecture.md Section 6 (Data Model) exactly —
+// that doc is the source of truth for *why* each field/constraint exists.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+
+enum Role {
+  CANDIDATE
+  INTERVIEWER
+  RECRUITER
+  HIRING_MANAGER
+  ADMIN
+}
+
+enum RoundType {
+  SCREENING
+  TECHNICAL
+  MANAGERIAL
+  HR
+}
+
+enum RequestStatus {
+  DRAFT
+  ACTIVE
+  CANCELLED
+  COMPLETED
+}
+
+enum RoundStatus {
+  AWAITING_AVAILABILITY
+  AWAITING_SCHEDULING
+  CONFIRMED
+  RESCHEDULE_REQUESTED
+  CANCELLED
+  COMPLETED
+}
+
+enum LoopStatus {
+  DRAFT
+  GENERATING
+  AWAITING_CONFIRM
+  CONFIRMED
+  CANCELLED
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+  SUPERSEDED // replaced by a reschedule
+}
+
+enum ConfirmationMode {
+  MANUAL
+  AUTO
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+// ---------- Tenant & identity ----------
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users             User[]
+  jobs              Job[]
+  schedulingPolicy  SchedulingPolicy?
+  skills            Skill[]
+
+  @@map("organizations")
+}
+
+model User {
+  id               String   @id @default(uuid())
+  organizationId   String
+  email            String   @unique
+  passwordHash     String? // null if the user only ever signs in via OAuth
+  fullName         String
+  timezone         String   @default("UTC")
+  googleOAuthId    String?
+  notificationPreferences Json @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization      Organization        @relation(fields: [organizationId], references: [id])
+  roles             RoleAssignment[]
+  candidateProfile  CandidateProfile?
+  interviewerProfile InterviewerProfile?
+  refreshTokens     RefreshToken[]
+
+  @@unique([organizationId, googleOAuthId])
+  @@index([organizationId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model RoleAssignment {
+  id     String @id @default(uuid())
+  userId String
+  role   Role
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, role])
+  @@map("role_assignments")
+}
+
+model CandidateProfile {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id])
+
+  interviewRequests InterviewRequest[]
+
+  @@map("candidate_profiles")
+}
+
+model InterviewerProfile {
+  userId               String  @id
+  maxInterviewsPerDay  Int?
+  preferredWindowsJson Json    @default("[]")
+
+  user   User             @relation(fields: [userId], references: [id])
+  skills InterviewerSkill[]
+  panelAssignments PanelAssignment[]
+
+  @@map("interviewer_profiles")
+}
+
+model Skill {
+  id             String @id @default(uuid())
+  organizationId String
+  name           String
+
+  organization Organization       @relation(fields: [organizationId], references: [id])
+  interviewers InterviewerSkill[]
+
+  @@unique([organizationId, name])
+  @@map("skills")
+}
+
+model InterviewerSkill {
+  interviewerId String
+  skillId       String
+  proficiency   Int    @default(3) // 1-5
+
+  interviewer InterviewerProfile @relation(fields: [interviewerId], references: [userId])
+  skill       Skill              @relation(fields: [skillId], references: [id])
+
+  @@id([interviewerId, skillId])
+  @@map("interviewer_skills")
+}
+
+// ---------- Requisition & interview pipeline ----------
+
+model Job {
+  id             String @id @default(uuid())
+  organizationId String
+  title          String
+  department     String?
+
+  organization      Organization       @relation(fields: [organizationId], references: [id])
+  interviewRequests InterviewRequest[]
+
+  @@index([organizationId])
+  @@map("jobs")
+}
+
+model InterviewRequest {
+  id          String        @id @default(uuid())
+  jobId       String
+  candidateId String
+  status      RequestStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+
+  job       Job              @relation(fields: [jobId], references: [id])
+  candidate CandidateProfile @relation(fields: [candidateId], references: [userId])
+  rounds    InterviewRound[]
+  loops     InterviewLoop[]
+
+  @@index([candidateId])
+  @@index([jobId])
+  @@map("interview_requests")
+}
+
+model InterviewRound {
+  id              String      @id @default(uuid())
+  requestId       String
+  loopId          String? // set only when bundled into a loop (architecture doc 6.1)
+  roundType       RoundType
+  durationMinutes Int
+  sequenceOrder   Int
+  status          RoundStatus @default(AWAITING_AVAILABILITY)
+  dateRangeStart  DateTime
+  dateRangeEnd    DateTime
+
+  request              InterviewRequest      @relation(fields: [requestId], references: [id])
+  loop                 InterviewLoop?        @relation(fields: [loopId], references: [id])
+  panelAssignments     PanelAssignment[]
+  availabilityWindows  AvailabilityWindow[]
+  slotRecommendations  SlotRecommendation[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  rescheduleRequests    RescheduleRequest[]
+
+  @@index([requestId])
+  @@index([loopId])
+  @@map("interview_rounds")
+}
+
+model PanelAssignment {
+  id            String @id @default(uuid())
+  roundId       String
+  interviewerId String
+  isRequired    Boolean @default(true)
+
+  round       InterviewRound     @relation(fields: [roundId], references: [id])
+  interviewer InterviewerProfile @relation(fields: [interviewerId], references: [userId])
+
+  @@unique([roundId, interviewerId])
+  @@map("panel_assignments")
+}
+
+// ---------- Loop entities (Interview Loop Builder — architecture doc 4.3 / 8.1) ----------
+
+model InterviewLoop {
+  id             String     @id @default(uuid())
+  requestId      String
+  candidateId    String
+  status         LoopStatus @default(DRAFT)
+  targetDateFrom DateTime
+  targetDateTo   DateTime
+  createdAt      DateTime   @default(now())
+
+  request  InterviewRequest @relation(fields: [requestId], references: [id])
+  rounds   InterviewRound[]
+  slotSets LoopSlotSet[]
+
+  @@index([requestId])
+  @@map("interview_loops")
+}
+
+model LoopSlotSet {
+  id             String   @id @default(uuid())
+  loopId         String
+  score          Float
+  rank           Int
+  explanationJson Json
+  createdAt      DateTime @default(now())
+
+  loop     InterviewLoop        @relation(fields: [loopId], references: [id])
+  slots    SlotRecommendation[]
+
+  @@index([loopId])
+  @@map("loop_slot_sets")
+}
+
+// ---------- Availability & scheduling engine output ----------
+
+model AvailabilityWindow {
+  id               String   @id @default(uuid())
+  roundId          String
+  ownerId          String // User.id (candidate or interviewer)
+  ownerType        String // "candidate" | "interviewer"
+  startUtc         DateTime
+  endUtc           DateTime
+  timezoneAtEntry  String
+  createdAt        DateTime @default(now())
+
+  round InterviewRound @relation(fields: [roundId], references: [id])
+
+  @@index([roundId])
+  @@index([ownerId])
+  @@map("availability_windows")
+}
+
+model CalendarEvent {
+  id               String   @id @default(uuid())
+  ownerId          String
+  provider         String // "google" | "mock"
+  externalEventId  String?
+  startUtc         DateTime
+  endUtc           DateTime
+  createdAt        DateTime @default(now())
+
+  @@index([ownerId, startUtc, endUtc])
+  @@map("calendar_events")
+}
+
+model SchedulingPolicy {
+  organizationId               String  @id
+  bufferMinutes                Int     @default(15)
+  workingHoursStart             String  @default("09:00")
+  workingHoursEnd                String  @default("18:00")
+  maxInterviewsPerDayPerInterviewer Int @default(4)
+  autoConfirmEnabled            Boolean @default(false)
+  autoConfirmMinScoreGap         Float   @default(15)
+  autoConfirmEligibleRoundTypes  RoundType[] @default([])
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("scheduling_policies")
+}
+
+model SlotRecommendation {
+  id              String   @id @default(uuid())
+  roundId         String
+  loopSlotSetId   String?
+  startUtc        DateTime
+  endUtc          DateTime
+  score           Float
+  rank            Int
+  explanationJson Json
+  createdAt       DateTime @default(now())
+
+  round       InterviewRound @relation(fields: [roundId], references: [id])
+  loopSlotSet LoopSlotSet?   @relation(fields: [loopSlotSetId], references: [id])
+  booking     Booking?
+
+  @@index([roundId])
+  @@index([loopSlotSetId])
+  @@map("slot_recommendations")
+}
+
+// ---------- Booking & downstream effects ----------
+
+model Booking {
+  id                    String           @id @default(uuid())
+  slotRecommendationId  String           @unique
+  status                BookingStatus    @default(CONFIRMED)
+  confirmationMode      ConfirmationMode @default(MANUAL)
+  loopBookingGroupId    String? // ties together bookings confirmed together as one loop
+  idempotencyKey        String?          @unique
+  createdAt             DateTime         @default(now())
+
+  slotRecommendation SlotRecommendation   @relation(fields: [slotRecommendationId], references: [id])
+  calendarEvent      Meeting?
+  rescheduleRequests RescheduleRequest[]
+
+  // Enforces "at most one CONFIRMED booking per slot" — the last line of defense against
+  // double-booking, independent of any application-layer bug (architecture doc 6.3).
+  @@index([status])
+  @@map("bookings")
+}
+
+model Meeting {
+  id                 String  @id @default(uuid())
+  bookingId          String  @unique
+  provider           String // "google_meet" | "mock"
+  joinUrl            String
+  externalMeetingId  String?
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+
+  @@map("meetings")
+}
+
+model RescheduleRequest {
+  id          String   @id @default(uuid())
+  bookingId   String
+  roundId     String
+  requestedBy String
+  reason      String?
+  status      String   @default("pending") // pending | completed | cancelled
+  createdAt   DateTime @default(now())
+
+  booking Booking        @relation(fields: [bookingId], references: [id])
+  round   InterviewRound @relation(fields: [roundId], references: [id])
+
+  @@map("reschedule_requests")
+}
+
+model Notification {
+  id         String              @id @default(uuid())
+  roundId    String
+  recipientId String
+  channel    NotificationChannel
+  template   String
+  status     NotificationStatus  @default(QUEUED)
+  retryCount Int                 @default(0)
+  createdAt  DateTime            @default(now())
+
+  round InterviewRound @relation(fields: [roundId], references: [id])
+
+  @@index([roundId])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  roundId     String?
+  entityType  String
+  entityId    String
+  action      String
+  actorId     String // a user id, or "assistant:<user_id>" for AI-assistant-initiated actions
+  beforeState Json?
+  afterState  Json?
+  createdAt   DateTime @default(now())
+
+  round InterviewRound? @relation(fields: [roundId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([roundId])
+  @@map("audit_logs")
+}
