@@ -1,0 +1,93 @@
+flowchart TB
+
+  subgraph CLIENTS["CLIENTS — one responsive Next.js app, three audiences"]
+    direction LR
+    C1["<b>Recruiter · Hiring Manager · Admin</b><br/>cookie session + RBAC<br/>dashboard · create request · book · cancel"]
+    C2["<b>Interviewer</b><br/>cookie session + RBAC<br/>accept · decline · request reschedule"]
+    C3["<b>Candidate — NO ACCOUNT</b><br/>secure token link  /s/&lt;token&gt;<br/>pick days · pick times · reschedule"]
+  end
+
+  subgraph APP["NEXT.JS 14 APPLICATION — single deployable, App Router"]
+    direction TB
+
+    subgraph PAGES["React pages (Tailwind)"]
+      direction LR
+      P1["<b>Staff pages</b> — /login · /dashboard · /requests/new · /requests/[id] · /interviewer"]
+      P2["<b>Candidate pages</b> — /s/[token] → /days → /times → /confirmed → /reschedule"]
+    end
+
+    subgraph API["API ROUTES — /app/api/**  ·  REST with a JSON envelope"]
+      direction LR
+      A1["<b>auth</b><br/>login · logout · me"]
+      A2["<b>requests</b><br/>create · list · detail · preview-panel<br/>slots · book · cancel · reschedule"]
+      A3["<b>assignments</b><br/>accept · decline"]
+      A4["<b>public/:token</b><br/>availability · slots<br/>book · reschedule-slots"]
+      A5["<b>dev/seed</b><br/>demo reset"]
+    end
+
+    G1["<b>SERVER-SIDE GATE — runs before every protected handler</b><br/>requireRole()  ·  RBAC enforced on the server, never by hiding buttons  (#1)<br/>zod validation on every request body"]
+
+    subgraph ENGINE["DETERMINISTIC SCHEDULING ENGINE — pure TypeScript, zero I/O  (Role A)"]
+      direction TB
+      E1["<b>selection.ts · pickPanel()</b>   features #18 + #20<br/>label matches round → has required skills → free in window → under daily cap<br/>→ <i>then</i> sort by load   ·   fairness never overrides qualification"]
+      E2["<b>scheduler.ts · generateSlots()</b>   features #5 #6 #7 #16<br/>walks candidate windows; per participant checks working hours in their OWN<br/>timezone · same local day · calendar conflict ± 15-min buffer · daily cap"]
+      E3["<b>scheduler.ts · rankSlots()</b>   feature #8<br/>scores valid slots only: first-choice window +30 · earliest +20<br/>· comfortable hours +15 · workload +10 · edge hours −8<br/><i>ranking can never rescue an invalid slot</i>"]
+      E4["<b>scheduler.ts · validateSlot()</b>   feature #9<br/>re-checks ONE slot inside the booking transaction,<br/>because calendars may have changed since generation"]
+      E5["<b>reschedule-core.ts</b>   feature #14 decision core<br/>findSameTimeReplacement() → §6A step 1 (keep the time, swap the interviewer)<br/>refineWindows() → §6B (candidate self-reschedule)"]
+      E1 --> E2 --> E3
+    end
+
+    subgraph SERVICES["SIDE-EFFECT SERVICES  (Role B)"]
+      direction LR
+      S1["<b>auth.ts</b><br/>bcrypt + JWT<br/>httpOnly cookie"]
+      S3["<b>booking</b><br/>transaction · re-check<br/>activeKey unique index"]
+      S2["<b>notify.ts</b><br/>render · send · record<br/>every email"]
+    end
+
+    subgraph ADAPTERS["ADAPTERS — one interface, two implementations, switched by PROVIDER_MODE"]
+      direction LR
+      AD1["<b>CalendarAdapter</b> — getBusy · createEvent · updateEvent · deleteEvent"]
+      AD2["<b>MailAdapter</b> — send()"]
+    end
+  end
+
+  DB[("<b>SQLite via Prisma</b> — 9 tables<br/>User · Candidate · InterviewRequest · AvailabilityWindow<br/>PanelAssignment · Booking · CalendarBusy · Notification · EventLog<br/><br/><b>Booking.activeKey UNIQUE</b> ⇒ double-booking is structurally impossible")]
+
+  subgraph EXT["EXTERNAL PROVIDERS"]
+    direction LR
+    X1["<b>Google Calendar API v3</b><br/>freebusy.query · events.insert + Meet link<br/><i>free tier</i>"]
+    X2["<b>Gmail API v1</b><br/>users.messages.send<br/><i>free tier · 500/day</i>"]
+    X3["<b>MOCK providers</b><br/>DB-backed busy times · emails recorded, not sent<br/><i>the whole demo runs with zero credentials</i>"]
+  end
+
+  C1 --> P1
+  C2 --> P1
+  C3 --> P2
+  P1 --> API
+  P2 --> A4
+  API --> G1
+  G1 --> ENGINE
+  G1 --> SERVICES
+
+  ENGINE -. "plain data in → ranked slots + reasons out" .-> SERVICES
+  SERVICES --> DB
+  S3 --> AD1
+  S2 --> AD2
+  AD1 -->|"PROVIDER_MODE = google"| X1
+  AD2 -->|"PROVIDER_MODE = google"| X2
+  AD1 -.->|"PROVIDER_MODE = mock <b>(default)</b>"| X3
+  AD2 -.->|"PROVIDER_MODE = mock <b>(default)</b>"| X3
+
+  classDef engine fill:#eef2ff,stroke:#4338ca,stroke-width:3px,color:#1e1b4b
+  classDef guard fill:#fef3c7,stroke:#b45309,stroke-width:3px,color:#451a03
+  classDef data fill:#ecfdf5,stroke:#047857,stroke-width:3px,color:#022c22
+  classDef ext fill:#fff7ed,stroke:#c2410c,stroke-width:2px,color:#431407
+  classDef client fill:#f1f5f9,stroke:#334155,stroke-width:2px,color:#0f172a
+  classDef svc fill:#faf5ff,stroke:#7e22ce,stroke-width:2px,color:#2e1065
+
+  class E1,E2,E3,E4,E5 engine
+  class G1 guard
+  class DB data
+  class X1,X2,X3 ext
+  class C1,C2,C3 client
+  class S1,S2,S3 svc
