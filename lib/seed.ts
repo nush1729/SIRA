@@ -39,6 +39,26 @@ const CAL = {
   ananya: process.env.GOOGLE_CAL_ANANYA || 'ananya_hr',
 };
 
+/**
+ * `@example.com` is a reserved, non-deliverable domain (RFC 2606) — fine for
+ * mock mode (nothing is actually sent), but in PROVIDER_MODE=google every
+ * seeded email would just vanish, since nobody can receive mail there. Set
+ * DEMO_CANDIDATE_INBOX / DEMO_INTERVIEWER_INBOX to a real Gmail address and
+ * every seeded person gets a plus-addressed variant of it (`base+dev@...`,
+ * `base+priya@...`) that all lands in that one real, checkable inbox —
+ * standard Gmail plus-addressing, no per-person mailbox needed. Left unset,
+ * everyone keeps the harmless `@example.com` placeholder.
+ */
+function plusAddress(base: string | undefined, tag: string, fallback: string): string {
+  const at = base?.indexOf('@') ?? -1;
+  if (!base || at === -1) return fallback;
+  return `${base.slice(0, at)}+${tag}${base.slice(at)}`;
+}
+const CANDIDATE_INBOX = process.env.DEMO_CANDIDATE_INBOX;
+const INTERVIEWER_INBOX = process.env.DEMO_INTERVIEWER_INBOX;
+const candidateEmail = (tag: string) => plusAddress(CANDIDATE_INBOX, tag, `${tag}@example.com`);
+const interviewerEmail = (tag: string) => plusAddress(INTERVIEWER_INBOX, tag, `${tag}@example.com`);
+
 /** Offset of `tz` from UTC, in minutes, at instant `ms`. DST-correct. */
 function zoneOffsetMin(ms: number, tz: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -102,13 +122,13 @@ export async function runSeed() {
     }),
     prisma.user.create({
       data: {
-        email: 'vikram@example.com', name: 'Vikram Rao', role: 'INTERVIEWER', passwordHash, timezone: IST,
+        email: interviewerEmail('vikram'), name: 'Vikram Rao', role: 'INTERVIEWER', passwordHash, timezone: IST,
         calendarId: CAL.vikram, labels: 'MANAGERIAL', skills: 'System Design,Culture,Leadership', dailyLimit: 2,
       },
     }),
     prisma.user.create({
       data: {
-        email: 'alex@example.com', name: 'Alex Rivera', role: 'INTERVIEWER', passwordHash, timezone: NY,
+        email: interviewerEmail('alex'), name: 'Alex Rivera', role: 'INTERVIEWER', passwordHash, timezone: NY,
         // SCREENING moved here with Jordan's promotion to ADMIN — he is the
         // only interviewer with any working-hours overlap with New York.
         calendarId: CAL.alex, labels: 'TECHNICAL,MANAGERIAL,SCREENING',
@@ -117,19 +137,19 @@ export async function runSeed() {
     }),
     prisma.user.create({
       data: {
-        email: 'priya@example.com', name: 'Priya Sharma', role: 'INTERVIEWER', passwordHash, timezone: IST,
+        email: interviewerEmail('priya'), name: 'Priya Sharma', role: 'INTERVIEWER', passwordHash, timezone: IST,
         calendarId: CAL.priya, labels: 'TECHNICAL', skills: 'Java,Backend,React,Full Stack', dailyLimit: 3,
       },
     }),
     prisma.user.create({
       data: {
-        email: 'rahul@example.com', name: 'Rahul Verma', role: 'INTERVIEWER', passwordHash, timezone: IST,
+        email: interviewerEmail('rahul'), name: 'Rahul Verma', role: 'INTERVIEWER', passwordHash, timezone: IST,
         calendarId: CAL.rahul, labels: 'TECHNICAL', skills: 'Java,Backend,React', dailyLimit: 3,
       },
     }),
     prisma.user.create({
       data: {
-        email: 'ananya@example.com', name: 'Ananya Patel', role: 'INTERVIEWER', passwordHash, timezone: IST,
+        email: interviewerEmail('ananya'), name: 'Ananya Patel', role: 'INTERVIEWER', passwordHash, timezone: IST,
         calendarId: CAL.ananya, labels: 'HR,SCREENING', skills: 'Behavioral,Policy,Screening,Sourcing,Design', dailyLimit: 3,
       },
     }),
@@ -198,13 +218,13 @@ export async function runSeed() {
   };
 
   // S1 — the live happy path: link is live, no windows yet.
-  await mk('Dev Menon', 'dev@example.com', NY, {
+  await mk('Dev Menon', candidateEmail('dev'), NY, {
     jobTitle: 'Product Engineer', roundType: 'SCREENING', durationMin: 30, requiredSkills: 'Screening',
     windowStart: day(0), windowEnd: day(5), status: 'AWAITING_AVAILABILITY',
   }, [], 'Full candidate journey');
 
   // S2 — Maya: three qualify on label+skills; load balancing decides.
-  await mk('Maya Iyer', 'maya@example.com', IST, {
+  await mk('Maya Iyer', candidateEmail('maya'), IST, {
     jobTitle: 'Sr Backend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java,Backend',
     windowStart: day(0), windowEnd: day(2), status: 'READY_TO_SCHEDULE',
   }, [
@@ -213,7 +233,7 @@ export async function runSeed() {
   ], 'Pool + load balancing');
 
   // S3 — Carlos: LA. Kolkata has ZERO working-hours overlap, so only Alex works.
-  await mk('Carlos Mendes', 'carlos@example.com', LA, {
+  await mk('Carlos Mendes', candidateEmail('carlos'), LA, {
     jobTitle: 'Platform Engineer', roundType: 'TECHNICAL', durationMin: 45, requiredSkills: 'Java',
     windowStart: day(2), windowEnd: day(4), status: 'READY_TO_SCHEDULE',
   }, [
@@ -222,7 +242,7 @@ export async function runSeed() {
   ], 'Timezone filtering');
 
   // S4 — Sophia: booked Thu 15:00 IST; decline → same-time replacement.
-  const req4 = await mk('Sophia Reddy', 'sophia@example.com', IST, {
+  const req4 = await mk('Sophia Reddy', candidateEmail('sophia'), IST, {
     jobTitle: 'Backend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java,Backend',
     windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED',
   }, [
@@ -240,7 +260,7 @@ export async function runSeed() {
   });
 
   // S5 — Ethan: very few valid slots, so ranking is visible.
-  await mk('Ethan Blake', 'ethan@example.com', LDN, {
+  await mk('Ethan Blake', candidateEmail('ethan'), LDN, {
     jobTitle: 'Solutions Engineer', roundType: 'SCREENING', durationMin: 30, requiredSkills: 'Screening',
     windowStart: day(0), windowEnd: day(5), status: 'READY_TO_SCHEDULE',
   }, [
@@ -250,7 +270,7 @@ export async function runSeed() {
   ], 'Few slots, clear ranking');
 
   // S6 — Chloe: the cancellation demo.
-  const req6 = await mk('Chloe Fernandes', 'chloe@example.com', IST, {
+  const req6 = await mk('Chloe Fernandes', candidateEmail('chloe'), IST, {
     jobTitle: 'Customer Success Manager', roundType: 'HR', durationMin: 30, requiredSkills: 'Behavioral',
     windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED',
   }, [{ startUtc: at(2, 10, 0, IST), endUtc: at(2, 14, 0, IST) }], 'Cancellation');
@@ -266,7 +286,7 @@ export async function runSeed() {
 
   // S7 — Ryan: booked Tue 16:00 IST, but Rahul now has a production incident
   // across it, and his earlier windows can't be covered → reschedule fails.
-  const req7 = await mk('Ryan Cole', 'ryan@example.com', IST, {
+  const req7 = await mk('Ryan Cole', candidateEmail('ryan'), IST, {
     jobTitle: 'Data Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java,Backend',
     windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED',
   }, [{ startUtc: at(1, 15, 0, IST), endUtc: at(1, 18, 0, IST) }], 'Reschedule with no options');
@@ -281,7 +301,7 @@ export async function runSeed() {
   });
 
   // S8 — Nikhil: booked Fri 10:00 IST; decline → rebooked from his own windows.
-  const req8 = await mk('Nikhil Rao', 'nikhil@example.com', IST, {
+  const req8 = await mk('Nikhil Rao', candidateEmail('nikhil'), IST, {
     jobTitle: 'Backend Engineer', roundType: 'TECHNICAL', durationMin: 60, requiredSkills: 'Java,Backend',
     windowStart: day(0), windowEnd: day(5), status: 'SCHEDULED',
   }, [
