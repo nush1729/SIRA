@@ -3,6 +3,8 @@ import { requireRole } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { getCalendarAdapter } from '@/lib/adapters/calendar';
 import { sendNotification } from '@/lib/notify';
+import { releaseInterviewers } from '@/lib/booking';
+import { interviewCancelled } from '@/lib/email-templates';
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -24,6 +26,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         where: { requestId: id, status: 'CONFIRMED' },
         data: { status: 'CANCELLED', activeKey: null }
       });
+      // Free the 15-min cells this booking held, or the interviewer looks busy
+      // for a slot that no longer exists.
+      if (booking) await releaseInterviewers(tx, booking.id);
       await tx.interviewRequest.update({
         where: { id },
         data: { status: 'CANCELLED' }
@@ -38,21 +43,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       await adapter.deleteEvent(booking.eventId);
     }
 
+    const startUtc = (booking?.startUtc ?? new Date()).toISOString();
     await sendNotification({
       requestId: id,
       toEmail: request.candidate.email,
-      template: 'cancelled',
-      subject: `Interview Cancelled: ${request.jobTitle}`,
-      body: `Your interview for ${request.jobTitle} has been cancelled.`
+      ...interviewCancelled({
+        name: request.candidate.name,
+        jobTitle: request.jobTitle,
+        startUtc,
+        timezone: request.candidate.timezone,
+      }),
     });
 
     for (const p of request.panel) {
       await sendNotification({
         requestId: id,
         toEmail: p.interviewer.email,
-        template: 'interviewer-cancelled',
-        subject: `Interview Cancelled: ${request.jobTitle}`,
-        body: `The interview with ${request.candidate.name} has been cancelled.`
+        ...interviewCancelled({
+          name: p.interviewer.name,
+          jobTitle: `${request.jobTitle} — ${request.candidate.name}`,
+          startUtc,
+          timezone: p.interviewer.timezone,
+        }),
       });
     }
 

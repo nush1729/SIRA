@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { sendNotification } from '@/lib/notify';
+import { availabilityRequest } from '@/lib/email-templates';
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -31,9 +32,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     await sendNotification({
       requestId: id,
       toEmail: request.candidate.email,
-      template: 'availability-request',
-      subject: `Interview request for ${request.jobTitle}`,
-      body: `Please provide your availability for the ${request.jobTitle} interview at: <a href="${candidateLink}">${candidateLink}</a>`
+      ...availabilityRequest({
+        candidateName: request.candidate.name,
+        jobTitle: request.jobTitle,
+        roundType: request.roundType,
+        durationMin: request.durationMin,
+        timezone: request.candidate.timezone,
+        link: candidateLink,
+        expiresAt: request.tokenExpiresAt,
+      }),
     });
 
     return NextResponse.json({ ok: true, data: { candidateLink } });

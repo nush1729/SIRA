@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { validateCandidateToken } from '@/lib/token-auth';
 import prisma from '@/lib/db';
-import { validateSlot } from '@/lib/engine';
+import { generateSlotsFromPool } from '@/lib/engine';
+import { buildSchedulingContext } from '@/lib/scheduling-context';
 import { getCalendarAdapter } from '@/lib/adapters/calendar';
-import { EngineParticipant, EngineConfig, ApiOk, ApiErr } from '@/lib/contracts';
+import { reserveInterviewers, syncPanelToBooking, SlotTakenError } from '@/lib/booking';
+import { ApiOk, ApiErr, BookingDTO } from '@/lib/contracts';
 import { sendNotification } from '@/lib/notify';
+import { bookingConfirmed, interviewerAssigned } from '@/lib/email-templates';
 import { z } from 'zod';
 
 const bookSchema = z.object({
@@ -17,61 +20,46 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
     const { token } = await params;
     const request = await validateCandidateToken(token);
     const id = request.id;
-    
+
     const body = await req.json();
     const parsed = bookSchema.safeParse(body);
-    if (!parsed.success) return NextResponse.json<ApiErr>({ ok: false, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, { status: 400 });
-    
+    if (!parsed.success) {
+      return NextResponse.json<ApiErr>(
+        { ok: false, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } },
+        { status: 400 }
+      );
+    }
+
     const { startUtc, endUtc } = parsed.data;
 
-    const adapter = getCalendarAdapter();
-    const participants: EngineParticipant[] = [];
+    /* -- Re-ask the engine; the candidate sends a time, never a person ----- */
+    const { config, candidate, pool } = await buildSchedulingContext(request);
+    const fresh = generateSlotsFromPool(config, candidate, pool, request.panelSize);
+    const slot = fresh.slots.find((s) => s.start === startUtc && s.end === endUtc);
 
-    participants.push({
-      id: request.candidate.id,
-      name: request.candidate.name,
-      role: 'candidate',
-      timezone: request.candidate.timezone,
-      availability: request.windows.map(w => ({ start: w.startUtc.toISOString(), end: w.endUtc.toISOString() })),
-      busy: []
-    });
-
-    for (const p of request.panel) {
-      const calId = p.interviewer.calendarId || p.interviewer.email;
-      const busy = await adapter.getBusy(calId, request.windowStart, request.windowEnd);
-      participants.push({
-        id: p.interviewer.id,
-        name: p.interviewer.name,
-        role: 'interviewer',
-        timezone: p.interviewer.timezone,
-        availability: [], 
-        busy: busy.map(b => ({ start: b.start.toISOString(), end: b.end.toISOString() })),
-        dailyLimit: p.interviewer.dailyLimit
-      });
+    if (!slot) {
+      return NextResponse.json<ApiErr>(
+        {
+          ok: false,
+          error: {
+            code: 'SLOT_NO_LONGER_VALID',
+            message: 'That time was just taken. Here are your refreshed options.',
+          },
+        },
+        { status: 409 }
+      );
     }
 
-    const config: EngineConfig = {
-      durationMin: request.durationMin,
-      bufferMin: 15,
-      workingHoursStart: "09:00",
-      workingHoursEnd: "18:00",
-      window: { start: request.windowStart.toISOString(), end: request.windowEnd.toISOString() }
-    };
-
-    const validation = validateSlot({ start: startUtc, end: endUtc }, config, participants);
-    if (!validation.valid) {
-      return NextResponse.json<ApiErr>({ ok: false, error: { code: 'SLOT_NO_LONGER_VALID', message: validation.reasons.join(', ') } }, { status: 409 });
-    }
+    const interviewerIds = slot.interviewerIds;
+    const interviewers = await prisma.user.findMany({ where: { id: { in: interviewerIds } } });
 
     const bookingResult = await prisma.$transaction(async (tx) => {
       const currentReq = await tx.interviewRequest.findUnique({ where: { id } });
-      if (currentReq?.status === 'SCHEDULED') {
-        throw new Error('ALREADY_BOOKED');
-      }
+      if (currentReq?.status === 'SCHEDULED') throw new Error('ALREADY_BOOKED');
 
       await tx.booking.updateMany({
         where: { requestId: id, status: 'CONFIRMED' },
-        data: { status: 'SUPERSEDED', activeKey: null }
+        data: { status: 'SUPERSEDED', activeKey: null },
       });
 
       const newBooking = await tx.booking.create({
@@ -80,62 +68,109 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
           startUtc: new Date(startUtc),
           endUtc: new Date(endUtc),
           status: 'CONFIRMED',
-          activeKey: id
-        }
+          activeKey: id,
+        },
+      });
+
+      // Locks the 15-min cells; a cross-request clash fails the whole booking.
+      await reserveInterviewers(tx, {
+        bookingId: newBooking.id,
+        interviewerIds,
+        startUtc: new Date(startUtc),
+        endUtc: new Date(endUtc),
+      });
+
+      await syncPanelToBooking(tx, {
+        requestId: id,
+        interviewerIds,
+        reason: slot.reasons.join(' · '),
       });
 
       await tx.interviewRequest.update({
         where: { id },
-        data: { status: 'SCHEDULED' }
+        data: { status: 'SCHEDULED', blockedReason: null },
       });
-
       await tx.eventLog.create({
-        data: { requestId: id, actor: 'candidate', action: 'BOOKED', detail: `Booked for ${startUtc}` }
+        data: {
+          requestId: id,
+          actor: 'candidate',
+          action: 'BOOKED',
+          detail: `Candidate booked ${startUtc} with ${slot.interviewerNames.join(', ')}`,
+        },
       });
 
       return newBooking;
     });
 
-    const attendees = [request.candidate.email, ...request.panel.map(p => p.interviewer.email)];
-    
+    const adapter = getCalendarAdapter();
     const event = await adapter.createEvent({
       requestId: id,
       startUtc: new Date(startUtc),
       endUtc: new Date(endUtc),
-      attendees,
-      summary: `Interview: ${request.jobTitle} - ${request.candidate.name}`,
-      description: `Interview via SIRA.`
+      attendees: [request.candidate.email, ...interviewers.map((i) => i.email)],
+      summary: `Interview: ${request.jobTitle} — ${request.candidate.name}`,
+      description: 'Interview arranged by SIRA.',
     });
 
     await prisma.booking.update({
       where: { id: bookingResult.id },
-      data: { eventId: event.eventId, meetLink: event.meetLink }
+      data: { eventId: event.eventId, meetLink: event.meetLink },
     });
 
     await sendNotification({
       requestId: id,
       toEmail: request.candidate.email,
-      template: 'booking-confirmed',
-      subject: `Interview Confirmed: ${request.jobTitle}`,
-      body: `Your interview is confirmed for ${startUtc}. Meet link: ${event.meetLink}`
+      ...bookingConfirmed({
+        candidateName: request.candidate.name,
+        jobTitle: request.jobTitle,
+        roundType: request.roundType,
+        durationMin: request.durationMin,
+        startUtc,
+        endUtc,
+        timezone: request.candidate.timezone,
+        interviewerNames: slot.interviewerNames,
+        meetLink: event.meetLink,
+      }),
     });
 
-    for (const p of request.panel) {
+    for (const person of interviewers) {
       await sendNotification({
         requestId: id,
-        toEmail: p.interviewer.email,
-        template: 'interviewer-booked',
-        subject: `New Interview Panel Assignment: ${request.jobTitle}`,
-        body: `You have been scheduled for an interview with ${request.candidate.name} at ${startUtc}. Meet link: ${event.meetLink}`
+        toEmail: person.email,
+        ...interviewerAssigned({
+          interviewerName: person.name,
+          candidateName: request.candidate.name,
+          jobTitle: request.jobTitle,
+          roundType: request.roundType,
+          startUtc,
+          endUtc,
+          timezone: person.timezone,
+          meetLink: event.meetLink,
+        }),
       });
     }
 
-    return NextResponse.json<ApiOk<any>>({ ok: true, data: { id: bookingResult.id, startUtc, endUtc, status: 'CONFIRMED', meetLink: event.meetLink } });
-  } catch (err: any) {
-    if (err.message === 'INVALID_TOKEN' || err.message === 'TOKEN_EXPIRED') {
-      return NextResponse.json<ApiErr>({ ok: false, error: { code: err.message as any, message: 'Invalid or expired token' } }, { status: 401 });
+    return NextResponse.json<ApiOk<BookingDTO>>({
+      ok: true,
+      data: { id: bookingResult.id, startUtc, endUtc, status: 'CONFIRMED', meetLink: event.meetLink },
+    });
+  } catch (err: unknown) {
+    const e = err as { message?: string; code?: string };
+    if (e?.message === 'INVALID_TOKEN' || e?.message === 'TOKEN_EXPIRED') {
+      return NextResponse.json<ApiErr>(
+        { ok: false, error: { code: e.message as 'INVALID_TOKEN' | 'TOKEN_EXPIRED', message: 'Invalid or expired token' } },
+        { status: 401 }
+      );
     }
-    if (err.message === 'ALREADY_BOOKED' || err.code === 'P2002') return NextResponse.json<ApiErr>({ ok: false, error: { code: 'ALREADY_BOOKED', message: 'Slot already booked' } }, { status: 409 });
-    return NextResponse.json<ApiErr>({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Internal error' } }, { status: 500 });
+    if (err instanceof SlotTakenError || e?.message === 'ALREADY_BOOKED' || e?.code === 'P2002') {
+      return NextResponse.json<ApiErr>(
+        { ok: false, error: { code: 'ALREADY_BOOKED', message: 'That time was just taken. Please pick another.' } },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json<ApiErr>(
+      { ok: false, error: { code: 'VALIDATION_ERROR', message: 'Internal error' } },
+      { status: 500 }
+    );
   }
 }

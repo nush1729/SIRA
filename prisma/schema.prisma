@@ -55,6 +55,8 @@ model User {                      // staff only — candidates are NOT users
   skills       String  @default("")   // csv: "Java,Backend"
   dailyLimit   Int     @default(3)
   assignments  PanelAssignment[]
+  bookingAssignments BookingAssignment[]
+  timeLocks    InterviewerTimeLock[]
 }
 
 model Candidate {                 // no password, no login
@@ -119,6 +121,38 @@ model Booking {
   meetLink   String?
   createdAt  DateTime   @default(now())
   request InterviewRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  assignedInterviewers BookingAssignment[]
+  timeLocks            InterviewerTimeLock[]
+}
+
+/// Who is ACTUALLY running this interview, decided at booking time from
+/// slot.interviewerIds. PanelAssignment is pool-time; this is booking-time.
+model BookingAssignment {
+  id            String @id @default(cuid())
+  bookingId     String
+  interviewerId String
+  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  interviewer User    @relation(fields: [interviewerId], references: [id])
+
+  @@unique([bookingId, interviewerId])
+}
+
+/// Cross-request double-booking guard.
+///
+/// Every slot sits on a fixed 15-minute grid (SLOT_STEP_MIN), so a booking can
+/// be decomposed into the discrete cells it occupies — interview plus buffer on
+/// both sides. The composite primary key then makes the DATABASE refuse the
+/// second writer, with no check-then-act gap: two transactions racing for
+/// overlapping times must collide on at least one shared cell.
+model InterviewerTimeLock {
+  interviewerId String
+  cellStartUtc  DateTime
+  bookingId     String   // for cleanup/tracing only — not part of the guarantee
+  interviewer User    @relation(fields: [interviewerId], references: [id])
+  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@id([interviewerId, cellStartUtc])
+  @@index([bookingId])
 }
 
 model CalendarBusy {              // used ONLY by MockCalendar (seeded fake schedules)

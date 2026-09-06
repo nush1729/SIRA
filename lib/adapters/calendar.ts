@@ -44,7 +44,18 @@ export const MockCalendar: CalendarAdapter = {
   }
 };
 
+/**
+ * PROVIDER_MODE=google reads real free/busy and writes real events with Meet
+ * links; anything else uses the seeded CalendarBusy rows. Same interface, so
+ * nothing above this line changes.
+ */
 export function getCalendarAdapter(): CalendarAdapter {
-  // If PROVIDER_MODE is google, we'd normally return GoogleCalendar, but for MVP/RoleB focus we stick to Mock if it's not written.
-  return MockCalendar; 
+  if (process.env.PROVIDER_MODE !== 'google') return MockCalendar;
+
+  const { GoogleCalendar, googleCredentialsPresent } = require('./google') as typeof import('./google');
+  if (!googleCredentialsPresent()) {
+    console.warn('[calendar] PROVIDER_MODE=google but Google credentials are missing — using MockCalendar.');
+    return MockCalendar;
+  }
+  return GoogleCalendar;
 }

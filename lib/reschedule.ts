@@ -2,6 +2,7 @@ import prisma from '@/lib/db';
 import { getCalendarAdapter } from '@/lib/adapters/calendar';
 import { generateSlots, pickPanel } from '@/lib/engine';
 import { sendNotification } from '@/lib/notify';
+import { releaseInterviewers, reserveInterviewers } from '@/lib/booking';
 import { RescheduleOutcome, EngineParticipant, EngineConfig, RoundType } from '@/lib/contracts';
 
 export async function processReschedule(requestId: string, declinerId?: string): Promise<RescheduleOutcome> {
@@ -129,6 +130,9 @@ export async function processReschedule(requestId: string, declinerId?: string):
             where: { id: booking.id },
             data: { status: 'SUPERSEDED', activeKey: null }
           });
+          // Free the old cells before locking the new ones, so the interviewer
+          // is never held at two times at once.
+          await releaseInterviewers(tx, booking.id);
         }
 
         if (declinerId) {
@@ -146,6 +150,16 @@ export async function processReschedule(requestId: string, declinerId?: string):
             activeKey: requestId
           }
         });
+
+        // Lock the new time for whoever the engine assigned to it.
+        if (bestSlot.interviewerIds?.length) {
+          await reserveInterviewers(tx, {
+            bookingId: nb.id,
+            interviewerIds: bestSlot.interviewerIds,
+            startUtc: new Date(bestSlot.start),
+            endUtc: new Date(bestSlot.end),
+          });
+        }
 
         await tx.eventLog.create({
           data: { requestId, actor: 'system', action: 'REBOOKED_NEW_TIME', detail: `Auto-rebooked to ${bestSlot.start}` }
@@ -196,8 +210,9 @@ export async function processReschedule(requestId: string, declinerId?: string):
         where: { id: booking.id },
         data: { status: 'SUPERSEDED', activeKey: null }
       });
+      await releaseInterviewers(tx, booking.id);
     }
-    
+
     await tx.interviewRequest.update({
       where: { id: requestId },
       data: { status: 'RESCHEDULE_REQUIRED', blockedReason: 'No alternative slots available.' }

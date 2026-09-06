@@ -61,6 +61,12 @@ export function SlotCard({
             )}
           </div>
 
+          {slot.interviewerNames.length > 0 && (
+            <p className="mt-1 text-[13px] font-medium text-zinc-700">
+              with {slot.interviewerNames.join(" & ")}
+            </p>
+          )}
+
           <p className="mt-0.5 text-[13px] text-zinc-500">
             {sameZone ? (
               <>Same zone as {candidateName.split(" ")[0]} — {fmtTimeRange(slot.start, slot.end, viewerTz)}</>

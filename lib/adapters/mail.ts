@@ -9,7 +9,18 @@ export const MockMailer: MailAdapter = {
   }
 };
 
+/**
+ * PROVIDER_MODE=google sends real Gmail; anything else records the email and
+ * logs it. Missing credentials fall back to mock loudly rather than throwing —
+ * a half-configured environment should degrade, not break the product.
+ */
 export function getMailAdapter(): MailAdapter {
-  // If PROVIDER_MODE is google, we'd normally return GoogleMailer, but for MVP we return MockMailer.
-  return MockMailer;
+  if (process.env.PROVIDER_MODE !== 'google') return MockMailer;
+
+  const { GmailMailer, googleCredentialsPresent } = require('./google') as typeof import('./google');
+  if (!googleCredentialsPresent()) {
+    console.warn('[mail] PROVIDER_MODE=google but Google credentials are missing — using MockMailer.');
+    return MockMailer;
+  }
+  return GmailMailer;
 }

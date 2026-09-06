@@ -15,3 +15,11 @@ const useStub = process.env.USE_ENGINE_STUB === 'true';
 export const generateSlots = useStub ? stub.generateSlots : realScheduler.generateSlots;
 export const validateSlot  = useStub ? stub.validateSlot  : realScheduler.validateSlot;
 export const pickPanel     = useStub ? stub.pickPanel     : realSelection.pickPanel;
+
+/**
+ * Pool-based scheduling (docs/12). These have no stub equivalent — they are
+ * always the real engine, because the stub predates them.
+ */
+export const generateSlotsFromPool = realScheduler.generateSlotsFromPool;
+export const computeFeasibleDays = realScheduler.computeFeasibleDays;
+export { refineWindowsFromPool, refineWindows, findSameTimeReplacement } from './reschedule-core';

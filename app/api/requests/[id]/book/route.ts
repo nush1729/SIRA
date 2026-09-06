@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { validateSlot } from '@/lib/engine';
+import { generateSlotsFromPool } from '@/lib/engine';
+import { buildSchedulingContext } from '@/lib/scheduling-context';
 import { getCalendarAdapter } from '@/lib/adapters/calendar';
-import { EngineParticipant, EngineConfig } from '@/lib/contracts';
+import { reserveInterviewers, syncPanelToBooking, SlotTakenError } from '@/lib/booking';
 import { sendNotification } from '@/lib/notify';
+import { bookingConfirmed, interviewerAssigned } from '@/lib/email-templates';
 import { z } from 'zod';
 
 const bookSchema = z.object({
@@ -14,74 +16,55 @@ const bookSchema = z.object({
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireRole("ADMIN");
-    
+    await requireRole('ADMIN');
+
     const { id } = await params;
     const body = await req.json();
     const parsed = bookSchema.safeParse(body);
-    if (!parsed.success) return NextResponse.json({ ok: false, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, { status: 400 });
-    
+    if (!parsed.success) {
+      return NextResponse.json({ ok: false, error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, { status: 400 });
+    }
+
     const { startUtc, endUtc } = parsed.data;
-    
+
     const request = await prisma.interviewRequest.findUnique({
       where: { id },
-      include: {
-        candidate: true,
-        windows: true,
-        panel: { include: { interviewer: true } }
-      }
+      include: { candidate: true, windows: true, panel: { include: { interviewer: true } } },
     });
-    if (!request) return NextResponse.json({ ok: false, error: { code: 'NOT_FOUND', message: 'Not found' } }, { status: 404 });
-
-    const adapter = getCalendarAdapter();
-    const participants: EngineParticipant[] = [];
-
-    participants.push({
-      id: request.candidate.id,
-      name: request.candidate.name,
-      role: 'candidate',
-      timezone: request.candidate.timezone,
-      availability: request.windows.map(w => ({ start: w.startUtc.toISOString(), end: w.endUtc.toISOString() })),
-      busy: []
-    });
-
-    for (const p of request.panel) {
-      const calId = p.interviewer.calendarId || p.interviewer.email;
-      const busy = await adapter.getBusy(calId, request.windowStart, request.windowEnd);
-      participants.push({
-        id: p.interviewer.id,
-        name: p.interviewer.name,
-        role: 'interviewer',
-        timezone: p.interviewer.timezone,
-        availability: [], 
-        busy: busy.map(b => ({ start: b.start.toISOString(), end: b.end.toISOString() })),
-        dailyLimit: p.interviewer.dailyLimit
-      });
+    if (!request) {
+      return NextResponse.json({ ok: false, error: { code: 'NOT_FOUND', message: 'Not found' } }, { status: 404 });
     }
 
-    const config: EngineConfig = {
-      durationMin: request.durationMin,
-      bufferMin: 15,
-      workingHoursStart: "09:00",
-      workingHoursEnd: "18:00",
-      window: { start: request.windowStart.toISOString(), end: request.windowEnd.toISOString() }
-    };
+    /* -- Re-ask the engine, and take WHO from its answer -------------------
+     * The client sends a time, never a person. Regenerating here also means a
+     * slot that has gone stale since the page loaded is simply absent.        */
+    const { config, candidate, pool } = await buildSchedulingContext(request);
+    const fresh = generateSlotsFromPool(config, candidate, pool, request.panelSize);
+    const slot = fresh.slots.find((s) => s.start === startUtc && s.end === endUtc);
 
-    const validation = validateSlot({ start: startUtc, end: endUtc }, config, participants);
-    if (!validation.valid) {
-      return NextResponse.json({ ok: false, error: { code: 'SLOT_NO_LONGER_VALID', message: validation.reasons.join(', ') } }, { status: 409 });
+    if (!slot) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: {
+            code: 'SLOT_NO_LONGER_VALID',
+            message: 'That slot was just taken or is no longer valid. Refreshed options are available.',
+          },
+        },
+        { status: 409 }
+      );
     }
 
-    // TRANSACTION
+    const interviewerIds = slot.interviewerIds;
+    const interviewers = await prisma.user.findMany({ where: { id: { in: interviewerIds } } });
+
     const bookingResult = await prisma.$transaction(async (tx) => {
       const currentReq = await tx.interviewRequest.findUnique({ where: { id } });
-      if (currentReq?.status === 'SCHEDULED') {
-        throw new Error('ALREADY_BOOKED');
-      }
+      if (currentReq?.status === 'SCHEDULED') throw new Error('ALREADY_BOOKED');
 
       await tx.booking.updateMany({
         where: { requestId: id, status: 'CONFIRMED' },
-        data: { status: 'SUPERSEDED', activeKey: null }
+        data: { status: 'SUPERSEDED', activeKey: null },
       });
 
       const newBooking = await tx.booking.create({
@@ -90,61 +73,95 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           startUtc: new Date(startUtc),
           endUtc: new Date(endUtc),
           status: 'CONFIRMED',
-          activeKey: id
-        }
+          activeKey: id,
+        },
       });
 
-      await tx.interviewRequest.update({
-        where: { id },
-        data: { status: 'SCHEDULED' }
+      // Assign + lock every 15-min cell. A cross-request clash fails here.
+      await reserveInterviewers(tx, {
+        bookingId: newBooking.id,
+        interviewerIds,
+        startUtc: new Date(startUtc),
+        endUtc: new Date(endUtc),
       });
 
+      await syncPanelToBooking(tx, {
+        requestId: id,
+        interviewerIds,
+        reason: slot.reasons.join(' · '),
+      });
+
+      await tx.interviewRequest.update({ where: { id }, data: { status: 'SCHEDULED', blockedReason: null } });
       await tx.eventLog.create({
-        data: { requestId: id, actor: 'system', action: 'BOOKED', detail: `Booked for ${startUtc}` }
+        data: {
+          requestId: id,
+          actor: 'system',
+          action: 'BOOKED',
+          detail: `Booked ${startUtc} with ${slot.interviewerNames.join(', ')}`,
+        },
       });
 
       return newBooking;
     });
 
-    // Outside TX: create calendar event + notify participants
-    const attendees = [request.candidate.email, ...request.panel.map(p => p.interviewer.email)];
-    
+    // Outside the transaction: external side effects that must not roll it back.
+    const adapter = getCalendarAdapter();
     const event = await adapter.createEvent({
       requestId: id,
       startUtc: new Date(startUtc),
       endUtc: new Date(endUtc),
-      attendees,
-      summary: `Interview: ${request.jobTitle} - ${request.candidate.name}`,
-      description: `Interview via SIRA.`
+      attendees: [request.candidate.email, ...interviewers.map((i) => i.email)],
+      summary: `Interview: ${request.jobTitle} — ${request.candidate.name}`,
+      description: `Interview arranged by SIRA.`,
     });
 
     await prisma.booking.update({
       where: { id: bookingResult.id },
-      data: { eventId: event.eventId, meetLink: event.meetLink }
+      data: { eventId: event.eventId, meetLink: event.meetLink },
     });
 
-    await sendNotification({
-      requestId: id,
-      toEmail: request.candidate.email,
-      template: 'booking-confirmed',
-      subject: `Interview Confirmed: ${request.jobTitle}`,
-      body: `Your interview is confirmed for ${startUtc}. Meet link: ${event.meetLink}`
+    const mail = bookingConfirmed({
+      candidateName: request.candidate.name,
+      jobTitle: request.jobTitle,
+      roundType: request.roundType,
+      durationMin: request.durationMin,
+      startUtc,
+      endUtc,
+      timezone: request.candidate.timezone,
+      interviewerNames: slot.interviewerNames,
+      meetLink: event.meetLink,
     });
+    await sendNotification({ requestId: id, toEmail: request.candidate.email, ...mail });
 
-    for (const p of request.panel) {
-      await sendNotification({
-        requestId: id,
-        toEmail: p.interviewer.email,
-        template: 'interviewer-booked',
-        subject: `New Interview Panel Assignment: ${request.jobTitle}`,
-        body: `You have been scheduled for an interview with ${request.candidate.name} at ${startUtc}. Meet link: ${event.meetLink}`
+    for (const person of interviewers) {
+      const note = interviewerAssigned({
+        interviewerName: person.name,
+        candidateName: request.candidate.name,
+        jobTitle: request.jobTitle,
+        roundType: request.roundType,
+        startUtc,
+        endUtc,
+        timezone: person.timezone,
+        meetLink: event.meetLink,
       });
+      await sendNotification({ requestId: id, toEmail: person.email, ...note });
     }
 
-    return NextResponse.json({ ok: true, data: { id: bookingResult.id, startUtc, endUtc, status: 'CONFIRMED', meetLink: event.meetLink } });
-  } catch (err: any) {
-    if (err.name === 'AuthError') return NextResponse.json({ ok: false, error: { code: err.code, message: err.message } }, { status: 401 });
-    if (err.message === 'ALREADY_BOOKED' || err.code === 'P2002') return NextResponse.json({ ok: false, error: { code: 'ALREADY_BOOKED', message: 'Slot already booked' } }, { status: 409 });
+    return NextResponse.json({
+      ok: true,
+      data: { id: bookingResult.id, startUtc, endUtc, status: 'CONFIRMED', meetLink: event.meetLink },
+    });
+  } catch (err: unknown) {
+    const e = err as { name?: string; code?: string; message?: string };
+    if (e?.name === 'AuthError') {
+      return NextResponse.json({ ok: false, error: { code: e.code, message: e.message } }, { status: e.code === 'UNAUTHORIZED' ? 401 : 403 });
+    }
+    if (err instanceof SlotTakenError || e?.message === 'ALREADY_BOOKED' || e?.code === 'P2002') {
+      return NextResponse.json(
+        { ok: false, error: { code: 'ALREADY_BOOKED', message: 'That interviewer was just booked for an overlapping time. Pick another slot.' } },
+        { status: 409 }
+      );
+    }
     return NextResponse.json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Internal error' } }, { status: 500 });
   }
 }
