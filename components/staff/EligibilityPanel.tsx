@@ -7,7 +7,7 @@
  * to be read by a human — do not reformat them here.
  */
 
-import { Card, Skeleton } from "@/components/ui";
+import { Card, Skeleton } from "@/components/staff/kit";
 import type { SelectionResult } from "@/lib/contracts";
 
 export function EligibilityPanel({

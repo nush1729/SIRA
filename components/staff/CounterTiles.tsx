@@ -6,7 +6,7 @@
  * Clicking a tile filters the list — the counter and the filter agree.
  */
 
-import { cx } from "@/components/ui";
+import { cx } from "@/components/staff/kit";
 import type { ReqStatus } from "@/lib/contracts";
 
 export type CounterKey = "AWAITING_AVAILABILITY" | "READY_TO_SCHEDULE" | "RESCHEDULE_REQUIRED";

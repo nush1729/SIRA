@@ -12,7 +12,7 @@ import { StaffTopBar } from "@/components/staff/StaffTopBar";
 import { ToastHost, useToasts } from "@/components/staff/ToastHost";
 import { SiraLogo } from "@/components/ui/SiraLogo";
 import { StaffSessionProvider } from "@/components/staff/session";
-import { Skeleton } from "@/components/ui";
+import { Skeleton } from "@/components/staff/kit";
 import type { SessionDTO } from "@/lib/contracts";
 
 export default function StaffLayout({ children }: { children: React.ReactNode }) {

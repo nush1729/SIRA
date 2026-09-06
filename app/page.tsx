@@ -12,6 +12,8 @@ const demoSlot: GeneratedSlot = {
   end: "2026-09-14T14:30:00Z",
   rank: 1,
   score: 95,
+  interviewerIds: ["u_priya"],
+  interviewerNames: ["Priya Sharma"],
   reasons: [
     "Fits candidate preferred window",
     "Interviewer available",

@@ -8,7 +8,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Button, Field, Input } from "@/components/ui";
+import { Button, Field, Input } from "@/components/staff/kit";
 import { SiraLogo, SiraMark } from "@/components/ui/SiraLogo";
 import { ApiError, getMe, login } from "@/lib/api-client";
 import { demoLogins, DEMO_PASSWORD } from "@/mocks/staff-fixtures";

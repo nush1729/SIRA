@@ -7,11 +7,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role { 
-  RECRUITER 
-  INTERVIEWER 
-  HIRING_MANAGER 
-  ADMIN 
+// Three roles only. Candidates have no account — they use a scoped token link.
+enum Role {
+  ADMIN
+  INTERVIEWER
 }
 
 enum RoundType { 

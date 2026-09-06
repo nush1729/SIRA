@@ -5,7 +5,7 @@ import { AssignmentDTO, RoundType, ApiOk, ApiErr } from '@/lib/contracts';
 
 export async function GET() {
   try {
-    const session = await requireRole("INTERVIEWER", "HIRING_MANAGER");
+    const session = await requireRole("INTERVIEWER", "ADMIN");
     
     const assignments = await prisma.panelAssignment.findMany({
       where: { interviewerId: session.id },

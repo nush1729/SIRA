@@ -22,12 +22,12 @@ export async function runSeed() {
 
   // 2. Staff Users
   const users = await Promise.all([
-    prisma.user.create({ data: { email: 'jordan@example.com', name: 'Jordan Lee', role: 'RECRUITER', passwordHash, timezone: 'Europe/London' } }),
-    prisma.user.create({ data: { email: 'vikram@example.com', name: 'Vikram Rao', role: 'HIRING_MANAGER', passwordHash, timezone: 'Asia/Kolkata' } }),
+    prisma.user.create({ data: { email: 'jordan@example.com', name: 'Jordan Lee', role: 'ADMIN', passwordHash, timezone: 'Europe/London' } }),
+    prisma.user.create({ data: { email: 'vikram@example.com', name: 'Vikram Rao', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'vikram_cal', labels: 'MANAGERIAL', dailyLimit: 2 } }),
     prisma.user.create({ data: { email: 'alex@example.com', name: 'Alex Rivera', role: 'INTERVIEWER', passwordHash, timezone: 'America/New_York', calendarId: 'alex_cal', labels: 'TECHNICAL,MANAGERIAL', dailyLimit: 2 } }),
     prisma.user.create({ data: { email: 'priya@example.com', name: 'Priya Sharma', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'priya_cal', labels: 'TECHNICAL', dailyLimit: 3 } }),
     prisma.user.create({ data: { email: 'rahul@example.com', name: 'Rahul Verma', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'rahul_cal', labels: 'TECHNICAL', dailyLimit: 3 } }),
-    prisma.user.create({ data: { email: 'ananya@example.com', name: 'Ananya Patel', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'ananya_cal', labels: 'HR', dailyLimit: 3 } }),
+    prisma.user.create({ data: { email: 'ananya@example.com', name: 'Ananya Patel', role: 'INTERVIEWER', passwordHash, timezone: 'Asia/Kolkata', calendarId: 'ananya_cal', labels: 'HR,SCREENING', dailyLimit: 3 } }),
     prisma.user.create({ data: { email: 'admin@example.com', name: 'Admin', role: 'ADMIN', passwordHash, timezone: 'Asia/Kolkata' } }),
   ]);
   

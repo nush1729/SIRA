@@ -14,7 +14,7 @@ const bookSchema = z.object({
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireRole("RECRUITER", "HIRING_MANAGER", "ADMIN");
+    await requireRole("ADMIN");
     
     const { id } = await params;
     const body = await req.json();

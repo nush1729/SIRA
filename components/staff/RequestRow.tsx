@@ -9,7 +9,7 @@
  */
 
 import Link from "next/link";
-import { Button, StatusPill, cx } from "@/components/ui";
+import { Button, StatusPill, cx } from "@/components/staff/kit";
 import { ROUND_LABEL, avatarTone, fmtInstant, initials } from "@/components/staff/format";
 import type { RequestListItemDTO } from "@/lib/contracts";
 

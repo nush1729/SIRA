@@ -12,7 +12,7 @@ const respondSchema = z.object({
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await requireRole("INTERVIEWER", "HIRING_MANAGER");
+    const session = await requireRole("INTERVIEWER", "ADMIN");
     const { id } = await params;
     
     const body = await req.json();

@@ -5,7 +5,7 @@ import { fetchRequestDetail } from '@/lib/data-fetchers';
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireRole("RECRUITER", "HIRING_MANAGER", "ADMIN");
+    await requireRole("ADMIN");
     const { id } = await params;
     
     const detail = await fetchRequestDetail(id);

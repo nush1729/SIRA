@@ -18,7 +18,7 @@ const previewSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await requireRole("RECRUITER", "HIRING_MANAGER", "ADMIN");
+    await requireRole("ADMIN");
     const body = await req.json();
     const parsed = previewSchema.safeParse(body);
     

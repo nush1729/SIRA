@@ -12,7 +12,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { Button, Card, Dialog, EmptyState, ErrorState, Input, Skeleton, StatusPill, cx } from "@/components/ui";
+import { Button, Card, Dialog, EmptyState, ErrorState, Input, Skeleton, StatusPill, cx } from "@/components/staff/kit";
 import { PanelCard } from "@/components/staff/PanelCard";
 import { SlotCard } from "@/components/staff/SlotCard";
 import { RejectionsPanel } from "@/components/staff/RejectionsPanel";

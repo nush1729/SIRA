@@ -15,7 +15,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Button, Card, Dialog, EmptyState, ErrorState, Input, Skeleton, StatusPill, cx } from "@/components/ui";
+import { Button, Card, Dialog, EmptyState, ErrorState, Input, Skeleton, StatusPill, cx } from "@/components/staff/kit";
 import { CalendarPanel } from "@/components/staff/CalendarPanel";
 import { RescheduleOutcomeBanner } from "@/components/staff/RescheduleOutcomeBanner";
 import { ToastHost, useToasts } from "@/components/staff/ToastHost";

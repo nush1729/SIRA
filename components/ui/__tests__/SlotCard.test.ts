@@ -10,6 +10,8 @@ const slot: GeneratedSlot = {
   end: "2026-09-14T14:30:00Z",
   rank: 1,
   score: 73,
+  interviewerIds: ["u_priya"],
+  interviewerNames: ["Priya Sharma"],
   reasons: ["interviewer-private-id has load 2/3"],
 };
 

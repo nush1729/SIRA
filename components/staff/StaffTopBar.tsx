@@ -8,7 +8,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Button, Dialog, cx } from "@/components/ui";
+import { Button, Dialog, cx } from "@/components/staff/kit";
 import { SiraLogo } from "@/components/ui/SiraLogo";
 import { avatarTone, initials, zoneCity } from "@/components/staff/format";
 import type { SessionDTO } from "@/lib/contracts";

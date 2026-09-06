@@ -27,7 +27,7 @@ const createSchema = z.object({
 
 export async function GET(req: Request) {
   try {
-    await requireRole("RECRUITER", "HIRING_MANAGER", "ADMIN");
+    await requireRole("ADMIN");
     const { searchParams } = new URL(req.url);
     const status = searchParams.get('status');
     const q = searchParams.get('q');
@@ -87,7 +87,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    await requireRole("RECRUITER", "HIRING_MANAGER", "ADMIN");
+    await requireRole("ADMIN");
     const body = await req.json();
     const parsed = createSchema.safeParse(body);
     

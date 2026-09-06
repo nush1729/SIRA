@@ -9,7 +9,7 @@
  */
 
 import * as React from "react";
-import { Button, Card, EmptyState, ErrorState, Skeleton, cx } from "@/components/ui";
+import { Button, Card, EmptyState, ErrorState, Skeleton, cx } from "@/components/staff/kit";
 import { fmtDay, fmtTime, zoneCity, zoneLabel } from "@/components/staff/format";
 import { getMyCalendar } from "@/lib/api-client";
 import { useAsync } from "@/components/staff/useAsync";

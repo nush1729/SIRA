@@ -28,6 +28,8 @@ export function createDemoFixtures() {
         end: mon.set({ hour: 14, minute: 30 }).toISO()!,
         rank: 1,
         score: 92,
+        interviewerIds: ["u_ananya"],
+        interviewerNames: ["Ananya Patel"],
         reasons: [
           "Fits candidate preferred window",
           "Interviewer available",
@@ -40,6 +42,8 @@ export function createDemoFixtures() {
         end: mon.set({ hour: 16, minute: 0 }).toISO()!,
         rank: 2,
         score: 84,
+        interviewerIds: ["u_ananya"],
+        interviewerNames: ["Ananya Patel"],
         reasons: [
           "Fits candidate availability",
           "Interviewer available",
@@ -52,6 +56,8 @@ export function createDemoFixtures() {
         end: tue.set({ hour: 15, minute: 0 }).toISO()!,
         rank: 3,
         score: 78,
+        interviewerIds: ["u_ananya"],
+        interviewerNames: ["Ananya Patel"],
         reasons: [
           "Fits candidate availability",
           "Interviewer available",
@@ -63,6 +69,8 @@ export function createDemoFixtures() {
         end: wed.set({ hour: 15, minute: 30 }).toISO()!,
         rank: 4,
         score: 72,
+        interviewerIds: ["u_ananya"],
+        interviewerNames: ["Ananya Patel"],
         reasons: [
           "Fits candidate availability",
           "Interviewer available",
@@ -73,6 +81,8 @@ export function createDemoFixtures() {
         end: thu.set({ hour: 16, minute: 30 }).toISO()!,
         rank: 5,
         score: 65,
+        interviewerIds: ["u_ananya"],
+        interviewerNames: ["Ananya Patel"],
         reasons: [
           "Fits candidate availability",
           "Interviewer available",
@@ -89,6 +99,8 @@ export function createDemoFixtures() {
         end: mon.set({ hour: 10, minute: 30 }).toISO()!,
         rank: 1,
         score: 88,
+        interviewerIds: ["u_ananya"],
+        interviewerNames: ["Ananya Patel"],
         reasons: [
           "Fits candidate availability",
           "Interviewer available",
@@ -100,6 +112,8 @@ export function createDemoFixtures() {
         end: mon.set({ hour: 12, minute: 0 }).toISO()!,
         rank: 2,
         score: 75,
+        interviewerIds: ["u_rahul"],
+        interviewerNames: ["Rahul Verma"],
         reasons: [
           "Fits candidate availability",
           "Interviewer available",

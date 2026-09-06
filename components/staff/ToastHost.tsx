@@ -3,7 +3,7 @@
 /** Role C — one toast stack per page, driven by the `useToasts` hook. */
 
 import * as React from "react";
-import { Toast, type ToastTone } from "@/components/ui";
+import { Toast, type ToastTone } from "@/components/staff/kit";
 
 export type ToastItem = { id: number; message: string; tone: ToastTone };
 

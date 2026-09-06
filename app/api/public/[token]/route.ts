@@ -8,7 +8,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     const { token } = await params;
     const request = await validateCandidateToken(token);
 
-    const recruiter = await prisma.user.findFirst({ where: { role: 'RECRUITER' } });
+    // The candidate is told who is arranging their interview. Scheduling is an
+    // admin job now, so that's the admin — ordered by id for a stable answer.
+    const recruiter = await prisma.user.findFirst({
+      where: { role: 'ADMIN' },
+      orderBy: { id: 'asc' },
+    });
     const booking = request.bookings[0];
     
     const data: PublicRequestDTO = {

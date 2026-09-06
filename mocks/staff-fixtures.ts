@@ -477,7 +477,17 @@ export const requests: RequestListItemDTO[] = requestOrder.map((id) => {
  * ------------------------------------------------------------------------ */
 
 function slot(startIso: string, durationMin: number, rank: number, score: number, reasons: string[]) {
-  return { start: startIso, end: plusMin(startIso, durationMin), score, rank, reasons };
+  // interviewerIds/Names are filled in per request below — with pool-based
+  // assignment (docs/12) different slots can legitimately have different people.
+  return {
+    start: startIso,
+    end: plusMin(startIso, durationMin),
+    score,
+    rank,
+    reasons,
+    interviewerIds: [] as string[],
+    interviewerNames: [] as string[],
+  };
 }
 
 export const slotsByRequest: Record<string, GenerateSlotsResult> = {
@@ -596,6 +606,35 @@ export const slotsByRequest: Record<string, GenerateSlotsResult> = {
   r_chloe: { slots: [], rejections: [] },
   r_nikhil: { slots: [], rejections: [] },
 };
+
+/**
+ * Who the engine proposes per slot. Pool-based assignment means the same
+ * request can offer different interviewers at different times — whoever is
+ * actually free, least-loaded first — so these rotate through the pool.
+ */
+const POOL_BY_REQUEST: Record<string, { id: string; name: string }[]> = {
+  r_maya: [
+    { id: "u_priya", name: "Priya Sharma" },
+    { id: "u_rahul", name: "Rahul Verma" },
+  ],
+  r_carlos: [{ id: "u_alex", name: "Alex Rivera" }],
+  r_ethan: [{ id: "u_ananya", name: "Ananya Patel" }],
+  r_sophia: [{ id: "u_rahul", name: "Rahul Verma" }],
+  r_chloe: [{ id: "u_ananya", name: "Ananya Patel" }],
+  r_nikhil: [{ id: "u_rahul", name: "Rahul Verma" }],
+};
+
+function assignPool(map: Record<string, GenerateSlotsResult>) {
+  for (const [requestId, result] of Object.entries(map)) {
+    const pool = POOL_BY_REQUEST[requestId];
+    if (!pool?.length) continue;
+    result.slots.forEach((s, i) => {
+      const who = pool[i % pool.length];
+      s.interviewerIds = [who.id];
+      s.interviewerNames = [who.name];
+    });
+  }
+}
 
 /**
  * Slots that lose a race the first time you book them. Drives the
@@ -946,15 +985,21 @@ export function previewPanelFixture(input: {
 
   eligible.sort((a, b) => a.load - b.load || a.name.localeCompare(b.name));
 
-  eligible.forEach((p, i) => {
-    if (i < input.panelSize) {
-      selected.push({ id: p.id, name: p.name, reason: `selected · load ${p.load}/${p.dailyLimit}` });
-    } else {
-      rejected.push({ id: p.id, name: p.name, reason: `higher load (${p.load}/${p.dailyLimit}) than the selected panel` });
-    }
+  // The pool is everyone who qualifies — this is what slot generation draws on.
+  // `selected` is only a preview of who would most likely run it (docs/12).
+  const qualifiedPool = eligible.map((p) => ({
+    id: p.id,
+    name: p.name,
+    reason: `qualified · load ${p.load}/${p.dailyLimit}`,
+    currentLoad: p.load,
+    dailyLimit: p.dailyLimit,
+  }));
+
+  eligible.slice(0, input.panelSize).forEach((p) => {
+    selected.push({ id: p.id, name: p.name, reason: `selected · load ${p.load}/${p.dailyLimit}` });
   });
 
-  return { selected, rejected, insufficient: selected.length < input.panelSize };
+  return { pool: qualifiedPool, selected, rejected, insufficient: qualifiedPool.length < input.panelSize };
 }
 
 export const SKILL_OPTIONS = [
@@ -1003,3 +1048,7 @@ export const staffFixtures = {
   declineOutcomes,
   seedSummary,
 };
+
+// Both slot maps are declared by now, so hand each slot its proposed panel.
+assignPool(slotsByRequest);
+assignPool(rescheduleSlotsByRequest);

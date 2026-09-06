@@ -5,7 +5,7 @@
  * communication without opening an inbox. Table on desktop, stacked on mobile.
  */
 
-import { EmptyState } from "@/components/ui";
+import { EmptyState } from "@/components/staff/kit";
 import { fmtInstant, fmtRelative } from "@/components/staff/format";
 import type { NotificationDTO } from "@/lib/contracts";
 

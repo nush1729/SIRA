@@ -6,7 +6,7 @@
  * rank, and the engine's `reasons[]` as a checklist. Rendered, never computed.
  */
 
-import { Button, cx } from "@/components/ui";
+import { Button, cx } from "@/components/staff/kit";
 import { fmtDay, fmtTimeRange } from "@/components/staff/format";
 import type { GeneratedSlot } from "@/lib/contracts";
 

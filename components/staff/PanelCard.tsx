@@ -5,7 +5,7 @@
  * and the `reason` the engine gave for picking them.
  */
 
-import { StatusPill, cx } from "@/components/ui";
+import { StatusPill, cx } from "@/components/staff/kit";
 import { ROUND_LABEL, avatarTone, initials } from "@/components/staff/format";
 import type { PanelMemberDTO } from "@/lib/contracts";
 

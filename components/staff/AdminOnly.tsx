@@ -9,7 +9,7 @@
  */
 
 import Link from "next/link";
-import { Button, EmptyState } from "@/components/ui";
+import { Button, EmptyState } from "@/components/staff/kit";
 import { useStaffSession } from "@/components/staff/session";
 
 export function useIsAdmin(): boolean {

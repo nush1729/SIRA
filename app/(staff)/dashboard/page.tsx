@@ -8,7 +8,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Button, Card, EmptyState, ErrorState, Input, Select, Skeleton } from "@/components/ui";
+import { Button, Card, EmptyState, ErrorState, Input, Select, Skeleton } from "@/components/staff/kit";
 import { CounterTiles } from "@/components/staff/CounterTiles";
 import { RequestRow } from "@/components/staff/RequestRow";
 import { useAsync, useDebounced } from "@/components/staff/useAsync";
@@ -42,20 +42,21 @@ function Pipeline() {
   const [q, setQ] = React.useState("");
   const [status, setStatus] = React.useState<string>("ALL");
   const debouncedQ = useDebounced(q, 250);
-  const searchRef = React.useRef<HTMLInputElement>(null);
+  const SEARCH_ID = "staff-pipeline-search";
 
   // "/" jumps to search — the one shortcut a pipeline screen earns.
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement;
       const typing = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement;
+      const search = document.getElementById(SEARCH_ID) as HTMLInputElement | null;
       if (e.key === "/" && !typing) {
         e.preventDefault();
-        searchRef.current?.focus();
+        search?.focus();
       }
-      if (e.key === "Escape" && el === searchRef.current) {
+      if (e.key === "Escape" && el === search) {
         setQ("");
-        searchRef.current?.blur();
+        search?.blur();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -128,7 +129,7 @@ function Pipeline() {
                     ⌕
                   </span>
                   <Input
-                    ref={searchRef}
+                    id={SEARCH_ID}
                     type="search"
                     placeholder="Search candidate, email or job…"
                     aria-label="Search interviews"

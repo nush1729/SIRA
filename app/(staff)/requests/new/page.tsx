@@ -9,7 +9,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button, Card, Chip, Field, Input, Select } from "@/components/ui";
+import { Button, Card, Chip, Field, Input, Select } from "@/components/staff/kit";
 import { EligibilityPanel } from "@/components/staff/EligibilityPanel";
 import { ToastHost, useToasts } from "@/components/staff/ToastHost";
 import { COMMON_TIMEZONES, ROUND_LABEL, zoneCity } from "@/components/staff/format";
