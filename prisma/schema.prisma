@@ -1,0 +1,153 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role { 
+  RECRUITER 
+  INTERVIEWER 
+  HIRING_MANAGER 
+  ADMIN 
+}
+
+enum RoundType { 
+  SCREENING 
+  TECHNICAL 
+  MANAGERIAL 
+  HR 
+}
+
+enum ReqStatus { 
+  DRAFT 
+  AWAITING_AVAILABILITY 
+  READY_TO_SCHEDULE 
+  SCHEDULED
+  RESCHEDULE_REQUIRED 
+  CANCELLED 
+}
+
+enum PanelStatus { 
+  PENDING 
+  ACCEPTED 
+  DECLINED 
+  REPLACED 
+}
+
+enum BookStatus { 
+  CONFIRMED 
+  CANCELLED 
+  SUPERSEDED 
+}
+
+model User {                      // staff only — candidates are NOT users
+  id           String @id @default(cuid())
+  email        String @unique
+  name         String
+  passwordHash String
+  role         Role
+  timezone     String  @default("Asia/Kolkata")
+  // interviewer-only fields:
+  calendarId   String?            // Google secondary calendar id, or mock key
+  labels       String  @default("")   // csv: "TECHNICAL,MANAGERIAL"
+  skills       String  @default("")   // csv: "Java,Backend"
+  dailyLimit   Int     @default(3)
+  assignments  PanelAssignment[]
+}
+
+model Candidate {                 // no password, no login
+  id       String @id @default(cuid())
+  name     String
+  email    String
+  timezone String @default("America/New_York")
+  requests InterviewRequest[]
+}
+
+model InterviewRequest {
+  id             String    @id @default(cuid())
+  candidateId    String
+  jobTitle       String
+  roundType      RoundType
+  durationMin    Int
+  requiredSkills String    @default("")    // csv
+  panelSize      Int       @default(1)
+  windowStart    DateTime                   // scheduling window (UTC)
+  windowEnd      DateTime
+  status         ReqStatus @default(DRAFT)
+  token          String    @unique          // candidate secure link
+  tokenExpiresAt DateTime
+  blockedReason  String?                    // why RESCHEDULE_REQUIRED
+  createdAt      DateTime  @default(now())
+
+  candidate  Candidate            @relation(fields: [candidateId], references: [id])
+  windows    AvailabilityWindow[]
+  panel      PanelAssignment[]
+  bookings   Booking[]
+  notifications Notification[]
+  events     EventLog[]
+}
+
+model AvailabilityWindow {        // candidate-submitted (#4)
+  id        String   @id @default(cuid())
+  requestId String
+  startUtc  DateTime
+  endUtc    DateTime
+  request   InterviewRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+}
+
+model PanelAssignment {
+  id            String      @id @default(cuid())
+  requestId     String
+  interviewerId String
+  status        PanelStatus @default(PENDING)
+  reason        String?                       // why this person was picked (#18/#20 explainability)
+  request     InterviewRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  interviewer User             @relation(fields: [interviewerId], references: [id])
+  @@unique([requestId, interviewerId])
+}
+
+model Booking {
+  id         String     @id @default(cuid())
+  requestId  String
+  startUtc   DateTime
+  endUtc     DateTime
+  status     BookStatus @default(CONFIRMED)
+  activeKey  String?    @unique   // = requestId while CONFIRMED, NULL otherwise → blocks double-booking
+  eventId    String?               // external calendar event id
+  meetLink   String?
+  createdAt  DateTime   @default(now())
+  request InterviewRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+}
+
+model CalendarBusy {              // used ONLY by MockCalendar (seeded fake schedules)
+  id         String   @id @default(cuid())
+  calendarId String
+  title      String
+  startUtc   DateTime
+  endUtc     DateTime
+}
+
+model Notification {              // every email we send is recorded so the UI can show it
+  id        String   @id @default(cuid())
+  requestId String
+  toEmail   String
+  template  String
+  subject   String
+  body      String
+  status    String   @default("SENT")   // SENT | FAILED
+  createdAt DateTime @default(now())
+  request InterviewRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+}
+
+model EventLog {                  // minimal audit trail
+  id        String   @id @default(cuid())
+  requestId String
+  actor     String                 // user id, "candidate", or "system"
+  action    String                 // "REQUEST_CREATED", "PANEL_SELECTED", "BOOKED", ...
+  detail    String
+  createdAt DateTime @default(now())
+  request InterviewRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+}
