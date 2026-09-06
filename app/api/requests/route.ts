@@ -3,6 +3,7 @@ import prisma from '@/lib/db';
 import { requireRole } from '@/lib/auth';
 import { ApiOk, ApiErr, RequestListItemDTO, CreateRequestBody, SelectionCandidate, RoundType, RequestDetailDTO } from '@/lib/contracts';
 import { pickPanel } from '@/lib/engine';
+import { previewCurrentLoad } from '@/lib/scheduling-context';
 import { fetchRequestDetail } from '@/lib/data-fetchers';
 import { z } from 'zod';
 import { randomBytes } from 'crypto';
@@ -104,6 +105,7 @@ export async function POST(req: Request) {
 
     // Pick panel
     const allUsers = await prisma.user.findMany({ where: { role: 'INTERVIEWER' } });
+    const loadById = await previewCurrentLoad(data.window, allUsers.map((u) => u.id));
     const pool: SelectionCandidate[] = allUsers.map(u => ({
       id: u.id,
       name: u.name,
@@ -111,7 +113,7 @@ export async function POST(req: Request) {
       labels: (u.labels ? u.labels.split(',') : []) as RoundType[],
       skills: u.skills ? u.skills.split(',') : [],
       dailyLimit: u.dailyLimit,
-      currentLoad: 0,
+      currentLoad: loadById.get(u.id) ?? 0,
       availability: [],
       busy: []
     }));

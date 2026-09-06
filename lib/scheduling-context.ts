@@ -86,20 +86,25 @@ function declinedInterviewerIds(request: RequestRow): string[] {
  * days where they are full. Taking the total instead capped Alex across a
  * whole week for two Monday bookings (see docs/04 §2's S3 scenario).
  *
- * Shared by `buildPool` (load feeds ranking/cap) and `buildReplacementPool`
- * (same-time replacement needs the same honest number, not a hardcoded 0).
+ * Shared by `buildPool` (load feeds ranking/cap), `buildReplacementPool`
+ * (same-time replacement needs the same honest number, not a hardcoded 0),
+ * and `previewCurrentLoad` (the eligibility panel on request CREATION, where
+ * there is no `request.id` yet to exclude).
  */
 async function computeCurrentLoad(
-  request: RequestRow,
+  window: { windowStart: Date; windowEnd: Date; excludeRequestId?: string },
   interviewerIds: string[]
 ): Promise<Map<string, number>> {
+  const { windowStart, windowEnd, excludeRequestId } = window;
+  const notThisRequest = excludeRequestId ? { requestId: { not: excludeRequestId } } : {};
+
   const booked = await prisma.bookingAssignment.findMany({
     where: {
       interviewerId: { in: interviewerIds },
       booking: {
         status: 'CONFIRMED',
-        startUtc: { gte: request.windowStart, lt: request.windowEnd },
-        requestId: { not: request.id },
+        startUtc: { gte: windowStart, lt: windowEnd },
+        ...notThisRequest,
       },
     },
     include: { booking: true },
@@ -111,13 +116,13 @@ async function computeCurrentLoad(
   const legacy = await prisma.panelAssignment.findMany({
     where: {
       interviewerId: { in: interviewerIds },
-      requestId: { not: request.id },
+      ...notThisRequest,
       status: { not: 'DECLINED' },
       request: {
         bookings: {
           some: {
             status: 'CONFIRMED',
-            startUtc: { gte: request.windowStart, lt: request.windowEnd },
+            startUtc: { gte: windowStart, lt: windowEnd },
           },
         },
       },
@@ -137,7 +142,7 @@ async function computeCurrentLoad(
   legacyStarts.forEach(({ interviewerId, startUtc }) => push(interviewerId, startUtc));
 
   const windowDays: string[] = [];
-  for (let t = request.windowStart.getTime(); t < request.windowEnd.getTime(); t += 86_400_000) {
+  for (let t = windowStart.getTime(); t < windowEnd.getTime(); t += 86_400_000) {
     windowDays.push(new Date(t).toISOString().slice(0, 10));
   }
 
@@ -196,7 +201,10 @@ export async function buildPool(request: RequestRow): Promise<EngineParticipant[
   const interviewers = await prisma.user.findMany({ where: { role: 'INTERVIEWER' } });
   const interviewerIds = interviewers.map((u) => u.id);
 
-  const loadById = await computeCurrentLoad(request, interviewerIds);
+  const loadById = await computeCurrentLoad(
+    { windowStart: request.windowStart, windowEnd: request.windowEnd, excludeRequestId: request.id },
+    interviewerIds
+  );
 
   const candidates: SelectionCandidate[] = interviewers.map((u) => ({
     id: u.id,
@@ -275,7 +283,10 @@ export async function buildReplacementCandidates(
   const interviewerIds = interviewers.map((u) => u.id);
 
   const [loadById, bookedTimesFor] = await Promise.all([
-    computeCurrentLoad(request, interviewerIds),
+    computeCurrentLoad(
+      { windowStart: request.windowStart, windowEnd: request.windowEnd, excludeRequestId: request.id },
+      interviewerIds
+    ),
     heldBookingsLookup(request),
   ]);
 
@@ -304,4 +315,18 @@ export async function buildReplacementCandidates(
 export async function buildSchedulingContext(request: RequestRow) {
   const [pool] = await Promise.all([buildPool(request)]);
   return { config: buildConfig(request), candidate: buildCandidate(request), pool };
+}
+
+/**
+ * Real `currentLoad` for the eligibility PREVIEW at request creation time —
+ * there is no request id yet to exclude, so this is the one caller that
+ * passes `computeCurrentLoad` a plain window instead of a `RequestRow`.
+ * Without this the "who's eligible" panel always showed "load 0/N" for
+ * everyone, even someone genuinely at their daily cap.
+ */
+export async function previewCurrentLoad(
+  window: { start: string; end: string },
+  interviewerIds: string[]
+): Promise<Map<string, number>> {
+  return computeCurrentLoad({ windowStart: new Date(window.start), windowEnd: new Date(window.end) }, interviewerIds);
 }
