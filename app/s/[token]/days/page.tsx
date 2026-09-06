@@ -9,7 +9,7 @@ import { Button, buttonStyles } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LoadingState } from "@/components/ui/Skeleton";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
-import { getPublicRequest, submitAvailability } from "@/lib/api-public";
+import { getFeasibleDays, getPublicRequest, submitAvailability } from "@/lib/api-public";
 import type { PublicRequestDTO, TimeWindow } from "@/lib/contracts";
 
 interface CalendarDay {
@@ -35,6 +35,23 @@ export default function CandidateDaysPage() {
   const [timezone, setTimezone] = useState("America/New_York");
   const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
   const [isSubmitting, setIsSubmitting] = useState(false);
+  /* Days the panel could actually cover. null = not known (mock mode, or the
+   * check failed), in which case every weekday stays selectable. */
+  const [feasible, setFeasible] = useState<Set<string> | null>(null);
+  const [blockedReasons, setBlockedReasons] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    getFeasibleDays(token).then((res) => {
+      if (cancelled || !res.ok) return;
+      if (!res.data.days.length && !res.data.blocked.length) return; // no model
+      setFeasible(new Set(res.data.days));
+      setBlockedReasons(Object.fromEntries(res.data.blocked.map((b) => [b.day, b.reason])));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   // Load candidate request
   useEffect(() => {
@@ -82,7 +99,10 @@ export default function CandidateDaysPage() {
       const current = startMonday.plus({ days: i });
       const isWeekend = current.weekday === 6 || current.weekday === 7;
       const isPast = current < today;
-      const isSelectable = !isWeekend && !isPast;
+      // A day nobody on the panel can cover is not selectable, whatever the
+      // calendar says.
+      const panelCanCover = feasible === null || feasible.has(current.toISODate()!);
+      const isSelectable = !isWeekend && !isPast && panelCanCover;
 
       days.push({
         date: current,
@@ -96,7 +116,7 @@ export default function CandidateDaysPage() {
       });
     }
     return days;
-  }, [timezone]);
+  }, [timezone, feasible]);
 
   function toggleDate(dateKey: string) {
     setSelectedDates((prev) => {
@@ -279,7 +299,13 @@ export default function CandidateDaysPage() {
                   <div
                     key={day.dateKey}
                     aria-disabled="true"
-                    title={day.isWeekend ? "Weekend (unavailable)" : "Past date"}
+                    title={
+                      day.isWeekend
+                        ? "Weekend (unavailable)"
+                        : day.isPast
+                          ? "Past date"
+                          : (blockedReasons[day.dateKey] ?? "No interviewer can cover this day")
+                    }
                     className="flex min-h-12 sm:min-h-14 flex-col items-center justify-center rounded-lg border border-transparent text-xs text-zinc-300 select-none bg-zinc-50/40"
                   >
                     <span>{day.dayNumber}</span>

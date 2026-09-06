@@ -1,4 +1,5 @@
 import type {
+  FeasibleDaysResult,
   ApiResponse,
   BookingDTO,
   GenerateSlotsResult,
@@ -242,6 +243,29 @@ export async function getRescheduleSlots(
         code: "NOT_FOUND",
         message: err instanceof Error ? err.message : "Failed to load reschedule options",
       },
+    };
+  }
+}
+
+/**
+ * Which local days could actually hold this interview (A's computeFeasibleDays
+ * via B's route). Used to grey out days that were never going to work, with a
+ * reason, instead of letting the candidate pick one and hit an empty screen.
+ */
+export async function getFeasibleDays(
+  token: string
+): Promise<ApiResponse<FeasibleDaysResult>> {
+  if (isMockMode()) {
+    // Fixtures have no feasibility model; every weekday is offered.
+    return { ok: true, data: { days: [], timezone: "", blocked: [] } };
+  }
+  try {
+    const res = await fetch(`/api/public/${encodeURIComponent(token)}/feasible-days`);
+    return (await res.json()) as ApiResponse<FeasibleDaysResult>;
+  } catch {
+    return {
+      ok: false,
+      error: { code: "VALIDATION_ERROR", message: "Could not check which days are open." },
     };
   }
 }

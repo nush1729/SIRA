@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { buttonStyles } from "@/components/ui/Button";
 import { SlotCard } from "@/components/ui/SlotCard";
@@ -22,9 +22,31 @@ const demoSlot: GeneratedSlot = {
   ],
 };
 
+type DemoLink = { name: string; scenario: string; url: string };
+
 export default function HomePage() {
   const [timezone, setTimezone] = useState("America/New_York");
   const [selected, setSelected] = useState(true);
+
+  /* Candidate tokens are random per seed, so the scenario links are read from
+   * the live seed summary. Falls back to the fixture tokens, which is what
+   * NEXT_PUBLIC_MOCK_API=true serves. */
+  const [links, setLinks] = useState<DemoLink[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/dev/seed")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled && d?.ok && Array.isArray(d.candidateLinks)) setLinks(d.candidateLinks);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const linkFor = (name: string, fallback: string) =>
+    links.find((l) => l.name.startsWith(name))?.url ?? fallback;
 
   return (
     <div className="candidate-background flex min-h-dvh w-full max-w-full flex-col justify-between overflow-x-hidden px-4 py-6 sm:px-8 sm:py-8 lg:px-12 xl:px-16">
@@ -106,7 +128,7 @@ export default function HomePage() {
             <div className="pt-3 space-y-3">
               <div>
                 <Link
-                  href="/s/demo-dev"
+                  href={linkFor("Dev Menon", "/s/demo-dev")}
                   className={buttonStyles("primary", "text-sm sm:text-base py-3 sm:py-3.5 px-6 sm:px-8 shadow-sm font-semibold w-full sm:w-auto inline-flex")}
                 >
                   Experience Candidate Flow →
@@ -124,19 +146,19 @@ export default function HomePage() {
               </span>
               <div className="flex flex-wrap gap-2 text-xs w-full min-w-0">
                 <Link
-                  href="/s/demo-dev"
+                  href={linkFor("Dev Menon", "/s/demo-dev")}
                   className="rounded-md border border-zinc-200 bg-white/80 px-2.5 py-1.5 text-zinc-700 hover:border-indigo-500 hover:text-indigo-700 transition"
                 >
                   Dev Menon (Full flow)
                 </Link>
                 <Link
-                  href="/s/demo-few"
+                  href={linkFor("Ethan Blake", "/s/demo-few")}
                   className="rounded-md border border-zinc-200 bg-white/80 px-2.5 py-1.5 text-zinc-700 hover:border-indigo-500 hover:text-indigo-700 transition"
                 >
                   Ethan Blake (2 ranked slots)
                 </Link>
                 <Link
-                  href="/s/demo-ryan/reschedule"
+                  href={`${linkFor("Ryan Cole", "/s/demo-ryan")}/reschedule`}
                   className="rounded-md border border-zinc-200 bg-white/80 px-2.5 py-1.5 text-zinc-700 hover:border-indigo-500 hover:text-indigo-700 transition"
                 >
                   Ryan Cole (Reschedule)
@@ -201,7 +223,7 @@ export default function HomePage() {
 
               <div className="mt-5">
                 <Link
-                  href="/s/demo-dev"
+                  href={linkFor("Dev Menon", "/s/demo-dev")}
                   className={buttonStyles("primary", "w-full text-center py-3 text-sm font-semibold")}
                 >
                   Book this slot in candidate flow →
