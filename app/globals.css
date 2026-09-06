@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   PLACEHOLDER — owned by Role D (design system). Tokens per docs/03 §1.
+   Replace wholesale when D0 lands; Role C reads only the CSS vars below.
+--------------------------------------------------------------------------- */
+:root {
+  --sira-bg: 250 250 250;        /* zinc-50   */
+  --sira-surface: 255 255 255;   /* white     */
+  --sira-border: 228 228 231;    /* zinc-200  */
+  --sira-text: 24 24 27;         /* zinc-900  */
+  --sira-muted: 113 113 122;     /* zinc-500  */
+  --sira-accent: 79 70 229;      /* indigo-600 */
+  --sira-success: 5 150 105;     /* emerald-600 */
+  --sira-warn: 245 158 11;       /* amber-500 */
+  --sira-danger: 225 29 72;      /* rose-600  */
+}
+
+html, body { height: 100%; }
+
+body {
+  color: rgb(var(--sira-text));
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* zinc-50 ground with one barely-there indigo wash at the top, so the page
+     has depth without introducing a second colour. */
+  background-color: rgb(var(--sira-bg));
+  background-image:
+    radial-gradient(720px 380px at 12% -8%, rgb(79 70 229 / 0.07), transparent 70%),
+    radial-gradient(620px 320px at 88% -12%, rgb(139 92 246 / 0.06), transparent 70%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* Numbers in tables and counters should never dance as they change. */
+.tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* Focus ring: one style everywhere. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid rgb(var(--sira-accent));
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: rgb(var(--sira-accent) / 0.18);
+}
+
+/* Quiet scrollbars — the content is the thing, not the chrome. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(212 212 216) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background-color: rgb(212 212 216);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: rgb(161 161 170); }
+
+/* Date inputs shouldn't look like a different design system. */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 120ms ease;
+}
+input[type="date"]:hover::-webkit-calendar-picker-indicator { opacity: 0.9; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
