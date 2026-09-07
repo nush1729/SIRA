@@ -18,6 +18,11 @@ export interface CalendarAdapter {
   createEvent(i: EventInput): Promise<{ eventId: string; meetLink: string | null }>;
   updateEvent(eventId: string, i: Partial<EventInput>, calendarId?: string): Promise<void>;
   deleteEvent(eventId: string, calendarId?: string): Promise<void>;
+  // Same-time replacement keeps the event but swaps who's running it — the
+  // event has to physically move to the new interviewer's own calendar (the
+  // one getBusy() reads), not just get its attendee list patched in place.
+  // No-op if fromCalendarId/toCalendarId are the same or undefined.
+  moveEvent(eventId: string, fromCalendarId: string | undefined, toCalendarId: string | undefined): Promise<void>;
 }
 
 export const MockCalendar: CalendarAdapter = {
@@ -45,6 +50,10 @@ export const MockCalendar: CalendarAdapter = {
   
   async deleteEvent(eventId) {
     console.log(`[MockCalendar] Deleted event ${eventId}`);
+  },
+
+  async moveEvent(eventId, fromCalendarId, toCalendarId) {
+    console.log(`[MockCalendar] Moved event ${eventId} from ${fromCalendarId} to ${toCalendarId}`);
   }
 };
 

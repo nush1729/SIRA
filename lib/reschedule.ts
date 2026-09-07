@@ -92,6 +92,23 @@ export async function processReschedule(requestId: string, declinerId?: string):
         });
 
         const replacementUser = await prisma.user.findUnique({ where: { id: replacement.id } });
+
+        // Move the real Calendar event to the replacement's own calendar (the
+        // one getBusy() reads) and swap the attendee off the decliner — the
+        // booked time isn't changing, only who's actually running it.
+        if (booking?.eventId) {
+          const declinerCalendarId = request.panel.find((p) => p.interviewerId === declinerId)?.interviewer.calendarId ?? undefined;
+          const newCalendarId = replacementUser?.calendarId ?? undefined;
+          await adapter.moveEvent(booking.eventId, declinerCalendarId, newCalendarId);
+          if (replacementUser) {
+            await adapter.updateEvent(
+              booking.eventId,
+              { attendees: [request.candidate.email, replacementUser.email] },
+              newCalendarId
+            );
+          }
+        }
+
         if (replacementUser) {
           await sendNotification({
             requestId,

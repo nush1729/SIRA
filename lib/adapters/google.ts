@@ -115,6 +115,14 @@ export const GoogleCalendar: CalendarAdapter = {
       if (code !== 404 && code !== 410) throw err;
     }
   },
+
+  async moveEvent(eventId, fromCalendarId, toCalendarId) {
+    const from = fromCalendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary';
+    const to = toCalendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary';
+    if (from === to) return;
+    const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
+    await calendar.events.move({ calendarId: from, eventId, destination: to, sendUpdates: 'all' });
+  },
 };
 
 /* -------------------------------------------------------------------------
