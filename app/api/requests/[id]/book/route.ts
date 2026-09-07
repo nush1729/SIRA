@@ -111,18 +111,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
 
     // Outside the transaction: external side effects that must not roll it back.
+    // The booking is already durably confirmed in our own DB at this point —
+    // the scheduling decision, not the external Calendar sync, is the source
+    // of truth. A Calendar/Meet failure here (e.g. a genuine Google API quota
+    // exhaustion, not just a transient blip already retried inside the
+    // adapter) must degrade to no Meet link, never fail the whole booking.
     const adapter = getCalendarAdapter();
-    const event = await adapter.createEvent({
-      requestId: id,
-      startUtc: new Date(startUtc),
-      endUtc: new Date(endUtc),
-      attendees: [request.candidate.email, ...interviewers.map((i) => i.email)],
-      summary: `Interview: ${request.jobTitle} — ${request.candidate.name}`,
-      description: `Interview arranged by SIRA.`,
-      // Land the event on the assigned interviewer's own calendar — the same
-      // one getBusy() reads from — not the master account's primary calendar.
-      calendarId: interviewers[0]?.calendarId ?? undefined,
-    });
+    let event: { eventId: string | null; meetLink: string | null } = { eventId: null, meetLink: null };
+    try {
+      event = await adapter.createEvent({
+        requestId: id,
+        startUtc: new Date(startUtc),
+        endUtc: new Date(endUtc),
+        attendees: [request.candidate.email, ...interviewers.map((i) => i.email)],
+        summary: `Interview: ${request.jobTitle} — ${request.candidate.name}`,
+        description: `Interview arranged by SIRA.`,
+        // Land the event on the assigned interviewer's own calendar — the same
+        // one getBusy() reads from — not the master account's primary calendar.
+        calendarId: interviewers[0]?.calendarId ?? undefined,
+      });
+    } catch (calendarErr) {
+      console.error('[book] Calendar event creation failed — booking stays confirmed without a Meet link:', (calendarErr as Error).message);
+    }
 
     await prisma.booking.update({
       where: { id: bookingResult.id },
@@ -141,6 +151,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       interviewerNames: slot.interviewerNames,
       meetLink: event.meetLink,
       rescheduleLink: `${baseUrl}/s/${request.token}/reschedule`,
+      confirmedLink: `${baseUrl}/s/${request.token}/confirmed`,
     });
     await sendNotification({ requestId: id, toEmail: request.candidate.email, ...mail });
 
@@ -154,6 +165,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         endUtc,
         timezone: person.timezone,
         meetLink: event.meetLink,
+        consoleLink: `${baseUrl}/interviewer`,
       });
       await sendNotification({ requestId: id, toEmail: person.email, ...note });
     }

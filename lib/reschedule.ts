@@ -42,6 +42,8 @@ export async function processReschedule(requestId: string, declinerId?: string):
 
   const booking = await prisma.booking.findFirst({ where: { requestId, status: 'CONFIRMED' } });
   const adapter = getCalendarAdapter();
+  const baseUrl = process.env.APP_URL || 'http://localhost:3000';
+  const consoleLink = `${baseUrl}/interviewer`;
   // The calendar the OLD event was created on — same active (non-declined,
   // non-replaced) panel member's calendar createEvent() targeted originally.
   // Read from `request.panel` fetched above, before any mutation below.
@@ -130,6 +132,7 @@ export async function processReschedule(requestId: string, declinerId?: string):
               endUtc: booking.endUtc.toISOString(),
               timezone: replacementUser.timezone,
               meetLink: booking.meetLink,
+              consoleLink,
             }),
           });
         }
@@ -262,6 +265,7 @@ export async function processReschedule(requestId: string, declinerId?: string):
               endUtc: bestSlot.end,
               timezone: person.timezone,
               meetLink: event.meetLink,
+              consoleLink,
             }),
           });
         }
@@ -300,7 +304,6 @@ export async function processReschedule(requestId: string, declinerId?: string):
   // Delete old calendar event AFTER transaction commits (external I/O)
   if (booking?.eventId) await adapter.deleteEvent(booking.eventId, oldInterviewerCalendarId);
 
-  const baseUrl = process.env.APP_URL || 'http://localhost:3000';
   await sendNotification({
     requestId,
     toEmail: request.candidate.email,

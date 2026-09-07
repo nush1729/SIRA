@@ -21,6 +21,7 @@ import { RescheduleOutcomeBanner } from "@/components/staff/RescheduleOutcomeBan
 import { ToastHost, useToasts } from "@/components/staff/ToastHost";
 import { useAsync } from "@/components/staff/useAsync";
 import { useStaffSession } from "@/components/staff/session";
+import { icsDataUrl } from "@/lib/ics";
 import {
   ROUND_LABEL,
   avatarTone,
@@ -137,6 +138,21 @@ function ScheduledInterviews() {
                               className="inline-flex h-8 items-center gap-1.5 rounded-md bg-emerald-600 px-3 text-[13px] font-medium text-white shadow-sm shadow-emerald-600/20 transition hover:bg-emerald-700"
                             >
                               <span aria-hidden>▶</span> Join
+                            </a>
+                          )}
+                          {r.booking && (
+                            <a
+                              href={icsDataUrl(
+                                `${r.jobTitle} Interview · ${r.roundType}`,
+                                `Interview with ${r.candidate.name} for ${r.jobTitle}. Join link: ${r.booking.meetLink || "TBD"}`,
+                                r.booking.meetLink || "Online meeting",
+                                r.booking.startUtc,
+                                r.booking.endUtc
+                              )}
+                              download="interview-invite.ics"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 text-[13px] font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50"
+                            >
+                              <span aria-hidden>🗓</span> Add to calendar
                             </a>
                           )}
                           <Link href={`/requests/${r.id}`}>

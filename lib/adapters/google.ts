@@ -35,6 +35,30 @@ function oauthClient() {
   return client;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * A user is waiting on this request, so retry budget is short (a couple of
+ * seconds total, not the seed script's ~30s) — enough to absorb a genuine
+ * transient burst-rate blip without making a live booking feel hung. If
+ * Google's quota is actually exhausted for the day (this OAuth app is still
+ * in "Testing" status, which gets much stricter caps), retrying won't help —
+ * callers must still treat this as a real failure, not assume it self-heals.
+ */
+async function withGoogleRetry<T>(fn: () => Promise<T>, { retries = 2, baseDelayMs = 500 } = {}): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const e = err as { code?: number; message?: string; errors?: { message?: string }[] };
+      const message = e?.message || e?.errors?.[0]?.message || '';
+      const isBurstLimit = e?.code === 403 && /usage limits exceeded/i.test(message);
+      if (!isBurstLimit || attempt >= retries) throw err;
+      await sleep(baseDelayMs * 2 ** attempt);
+    }
+  }
+}
+
 /* -------------------------------------------------------------------------
  *  Calendar
  * ---------------------------------------------------------------------- */
@@ -55,13 +79,15 @@ export async function listEvents(
   to: Date
 ): Promise<{ id: string; title: string; startUtc: string; endUtc: string; kind: 'BUSY' | 'INTERVIEW' }[]> {
   const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
-  const res = await calendar.events.list({
-    calendarId,
-    timeMin: from.toISOString(),
-    timeMax: to.toISOString(),
-    singleEvents: true,
-    orderBy: 'startTime',
-  });
+  const res = await withGoogleRetry(() =>
+    calendar.events.list({
+      calendarId,
+      timeMin: from.toISOString(),
+      timeMax: to.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+    })
+  );
   return (res.data.items ?? [])
     .filter((e) => e.status !== 'cancelled' && e.start?.dateTime && e.end?.dateTime)
     .map((e) => ({
@@ -76,13 +102,15 @@ export async function listEvents(
 export const GoogleCalendar: CalendarAdapter = {
   async getBusy(calendarId, from, to) {
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
-    const res = await calendar.freebusy.query({
-      requestBody: {
-        timeMin: from.toISOString(),
-        timeMax: to.toISOString(),
-        items: [{ id: calendarId }],
-      },
-    });
+    const res = await withGoogleRetry(() =>
+      calendar.freebusy.query({
+        requestBody: {
+          timeMin: from.toISOString(),
+          timeMax: to.toISOString(),
+          items: [{ id: calendarId }],
+        },
+      })
+    );
     const busy = res.data.calendars?.[calendarId]?.busy ?? [];
     return busy
       .filter((b) => b.start && b.end)
@@ -91,25 +119,27 @@ export const GoogleCalendar: CalendarAdapter = {
 
   async createEvent(input: EventInput) {
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
-    const res = await calendar.events.insert({
-      calendarId: input.calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
-      // Required for Google Meet to actually be created.
-      conferenceDataVersion: 1,
-      sendUpdates: 'all',
-      requestBody: {
-        summary: input.summary,
-        description: input.description,
-        start: { dateTime: input.startUtc.toISOString(), timeZone: 'UTC' },
-        end: { dateTime: input.endUtc.toISOString(), timeZone: 'UTC' },
-        attendees: input.attendees.map((email) => ({ email })),
-        conferenceData: {
-          createRequest: {
-            requestId: `sira-${input.requestId}-${Date.now()}`,
-            conferenceSolutionKey: { type: 'hangoutsMeet' },
+    const res = await withGoogleRetry(() =>
+      calendar.events.insert({
+        calendarId: input.calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
+        // Required for Google Meet to actually be created.
+        conferenceDataVersion: 1,
+        sendUpdates: 'all',
+        requestBody: {
+          summary: input.summary,
+          description: input.description,
+          start: { dateTime: input.startUtc.toISOString(), timeZone: 'UTC' },
+          end: { dateTime: input.endUtc.toISOString(), timeZone: 'UTC' },
+          attendees: input.attendees.map((email) => ({ email })),
+          conferenceData: {
+            createRequest: {
+              requestId: `sira-${input.requestId}-${Date.now()}`,
+              conferenceSolutionKey: { type: 'hangoutsMeet' },
+            },
           },
         },
-      },
-    });
+      })
+    );
 
     const meetLink =
       res.data.hangoutLink ??
@@ -121,25 +151,27 @@ export const GoogleCalendar: CalendarAdapter = {
 
   async updateEvent(eventId, input, calendarId) {
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
-    await calendar.events.patch({
-      calendarId: calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
-      eventId,
-      sendUpdates: 'all',
-      requestBody: {
-        ...(input.summary ? { summary: input.summary } : {}),
-        ...(input.description ? { description: input.description } : {}),
-        ...(input.startUtc ? { start: { dateTime: input.startUtc.toISOString(), timeZone: 'UTC' } } : {}),
-        ...(input.endUtc ? { end: { dateTime: input.endUtc.toISOString(), timeZone: 'UTC' } } : {}),
-        ...(input.attendees ? { attendees: input.attendees.map((email) => ({ email })) } : {}),
-      },
-    });
+    await withGoogleRetry(() =>
+      calendar.events.patch({
+        calendarId: calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
+        eventId,
+        sendUpdates: 'all',
+        requestBody: {
+          ...(input.summary ? { summary: input.summary } : {}),
+          ...(input.description ? { description: input.description } : {}),
+          ...(input.startUtc ? { start: { dateTime: input.startUtc.toISOString(), timeZone: 'UTC' } } : {}),
+          ...(input.endUtc ? { end: { dateTime: input.endUtc.toISOString(), timeZone: 'UTC' } } : {}),
+          ...(input.attendees ? { attendees: input.attendees.map((email) => ({ email })) } : {}),
+        },
+      })
+    );
   },
 
   async deleteEvent(eventId, calendarId) {
     const target = calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary';
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
     try {
-      await calendar.events.delete({ calendarId: target, eventId, sendUpdates: 'all' });
+      await withGoogleRetry(() => calendar.events.delete({ calendarId: target, eventId, sendUpdates: 'all' }));
     } catch (err) {
       // Already gone is a success for our purposes — BUT a 404 here can also
       // mean the event exists on a DIFFERENT calendar than `target` (wrong
@@ -157,7 +189,7 @@ export const GoogleCalendar: CalendarAdapter = {
     const to = toCalendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary';
     if (from === to) return;
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
-    await calendar.events.move({ calendarId: from, eventId, destination: to, sendUpdates: 'all' });
+    await withGoogleRetry(() => calendar.events.move({ calendarId: from, eventId, destination: to, sendUpdates: 'all' }));
   },
 };
 

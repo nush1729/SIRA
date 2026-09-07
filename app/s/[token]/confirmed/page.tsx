@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { DateTime } from "luxon";
 import { CandidateShell } from "@/components/shells/CandidateShell";
 import { buttonStyles } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -11,42 +10,7 @@ import { LoadingState } from "@/components/ui/Skeleton";
 import { formatSlotTime } from "@/components/ui/format-time";
 import { getPublicRequest } from "@/lib/api-public";
 import type { PublicRequestDTO } from "@/lib/contracts";
-
-function generateIcsContent(
-  title: string,
-  description: string,
-  location: string,
-  startUtc: string,
-  endUtc: string
-): string {
-  const formatUtcForIcs = (iso: string) => {
-    return DateTime.fromISO(iso, { zone: "utc" }).toFormat("yyyyLLdd'T'HHmmss'Z'");
-  };
-
-  const dtStart = formatUtcForIcs(startUtc);
-  const dtEnd = formatUtcForIcs(endUtc);
-  const dtStamp = DateTime.utc().toFormat("yyyyLLdd'T'HHmmss'Z'");
-  const uid = `sira-${Date.now()}@sira.local`;
-
-  return [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//SIRA//Smart Interview Scheduling//EN",
-    "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
-    "BEGIN:VEVENT",
-    `UID:${uid}`,
-    `DTSTAMP:${dtStamp}`,
-    `DTSTART:${dtStart}`,
-    `DTEND:${dtEnd}`,
-    `SUMMARY:${title}`,
-    `DESCRIPTION:${description}`,
-    `LOCATION:${location}`,
-    "STATUS:CONFIRMED",
-    "END:VEVENT",
-    "END:VCALENDAR",
-  ].join("\r\n");
-}
+import { icsDataUrl } from "@/lib/ics";
 
 function ConfirmedContent() {
   const params = useParams<{ token: string }>();
@@ -141,15 +105,13 @@ function ConfirmedContent() {
       ? booking.interviewerNames.join(", ")
       : request.recruiterName;
 
-  const icsDownloadUrl = `data:text/calendar;charset=utf8,${encodeURIComponent(
-    generateIcsContent(
-      `${request.jobTitle} Interview · ${request.roundType}`,
-      `Interview with ${interviewersText} for ${request.jobTitle}. Join link: ${booking.meetLink || "TBD"}`,
-      booking.meetLink || "Online meeting",
-      booking.startUtc,
-      booking.endUtc
-    )
-  )}`;
+  const icsDownloadUrl = icsDataUrl(
+    `${request.jobTitle} Interview · ${request.roundType}`,
+    `Interview with ${interviewersText} for ${request.jobTitle}. Join link: ${booking.meetLink || "TBD"}`,
+    booking.meetLink || "Online meeting",
+    booking.startUtc,
+    booking.endUtc
+  );
 
   return (
     <CandidateShell step={3} cardClassName="max-w-md sm:max-w-2xl lg:max-w-4xl">

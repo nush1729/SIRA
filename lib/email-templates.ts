@@ -106,12 +106,18 @@ export function bookingConfirmed(p: {
   interviewerNames: string[];
   meetLink: string | null;
   rescheduleLink?: string;
+  /** Candidate's own confirmed-booking page — has a working "Add to calendar (.ics)"
+   * download regardless of whether a real Meet link exists yet. */
+  confirmedLink?: string;
 }): Mail {
   const when = range(p.startUtc, p.endUtc, p.timezone);
   const who = p.interviewerNames.length ? ` with ${p.interviewerNames.join(' and ')}` : '';
   const rescheduleParagraph = p.rescheduleLink
     ? `Need a different time? <a href="${p.rescheduleLink}">Reschedule here</a>.`
     : `Need a different time? Use the same link you used to book and choose "I need to reschedule".`;
+  const calendarParagraph = p.confirmedLink
+    ? `<a href="${p.confirmedLink}">Add this to your calendar</a> (.ics download).`
+    : undefined;
   return {
     template: 'booking_confirmed',
     subject: `Confirmed — ${fmt(p.startUtc, p.timezone)}`,
@@ -121,6 +127,7 @@ export function bookingConfirmed(p: {
         `<strong>${when}</strong>${who}.`,
         `${p.jobTitle} · ${p.roundType.toLowerCase()} · ${p.durationMin} minutes.`,
         rescheduleParagraph,
+        ...(calendarParagraph ? [calendarParagraph] : []),
       ],
       p.meetLink ? { label: 'Join meeting', url: p.meetLink } : undefined
     ),
@@ -137,7 +144,13 @@ export function interviewerAssigned(p: {
   endUtc: string;
   timezone: string;
   meetLink: string | null;
+  /** The interviewer's own console — has an "Add to calendar" download for
+   * this same booking regardless of whether a real Meet link exists yet. */
+  consoleLink?: string;
 }): Mail {
+  const calendarParagraph = p.consoleLink
+    ? `<a href="${p.consoleLink}">Add this to your calendar</a> from your SIRA console (.ics download).`
+    : undefined;
   return {
     template: 'interviewer_booked',
     subject: `Interview scheduled — ${p.candidateName}, ${fmt(p.startUtc, p.timezone)}`,
@@ -147,6 +160,7 @@ export function interviewerAssigned(p: {
         `<strong>${range(p.startUtc, p.endUtc, p.timezone)}</strong> (your time).`,
         `${p.jobTitle} · ${p.roundType.toLowerCase()}.`,
         `If you can't make it, decline from your SIRA console — we'll try to find cover at the same time before moving the candidate.`,
+        ...(calendarParagraph ? [calendarParagraph] : []),
       ],
       p.meetLink ? { label: 'Join meeting', url: p.meetLink } : undefined
     ),
