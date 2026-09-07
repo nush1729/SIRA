@@ -102,17 +102,19 @@ export const GoogleCalendar: CalendarAdapter = {
   },
 
   async deleteEvent(eventId, calendarId) {
+    const target = calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary';
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
     try {
-      await calendar.events.delete({
-        calendarId: calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
-        eventId,
-        sendUpdates: 'all',
-      });
+      await calendar.events.delete({ calendarId: target, eventId, sendUpdates: 'all' });
     } catch (err) {
-      // Already gone is a success for our purposes.
+      // Already gone is a success for our purposes — BUT a 404 here can also
+      // mean the event exists on a DIFFERENT calendar than `target` (wrong
+      // calendarId passed in), which silently strands a real event forever.
+      // Log it instead of swallowing it invisibly — a caller passing the
+      // wrong calendarId is a bug worth seeing, not a normal idempotent-delete case.
       const code = (err as { code?: number })?.code;
       if (code !== 404 && code !== 410) throw err;
+      console.warn(`[GoogleCalendar] deleteEvent: ${eventId} not found on calendar ${target} (already deleted, or wrong calendarId was passed).`);
     }
   },
 

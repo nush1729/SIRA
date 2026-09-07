@@ -45,8 +45,16 @@ export async function processReschedule(requestId: string, declinerId?: string):
   // The calendar the OLD event was created on — same active (non-declined,
   // non-replaced) panel member's calendar createEvent() targeted originally.
   // Read from `request.panel` fetched above, before any mutation below.
+  // Decline case: the caller already flipped the decliner's own
+  // PanelAssignment to DECLINED before calling this function, so filtering
+  // that status out here would exclude exactly the person whose calendar
+  // holds the stale event — match by declinerId instead, regardless of
+  // status. Admin-forced reschedule (no declinerId): fall back to whoever's
+  // still actively assigned.
   const oldInterviewerCalendarId =
-    request.panel.find((p) => p.status !== 'DECLINED' && p.status !== 'REPLACED')?.interviewer.calendarId ??
+    (declinerId
+      ? request.panel.find((p) => p.interviewerId === declinerId)?.interviewer.calendarId
+      : request.panel.find((p) => p.status !== 'DECLINED' && p.status !== 'REPLACED')?.interviewer.calendarId) ??
     undefined;
 
   /* -- Branch 1: Same-Time Replacement (§6A step 1) ------------------------
