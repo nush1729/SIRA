@@ -39,6 +39,40 @@ function oauthClient() {
  *  Calendar
  * ---------------------------------------------------------------------- */
 
+/**
+ * Full event titles for the signed-in interviewer's OWN calendar view
+ * (app/api/calendar/mine) — separate from getBusy(), which the scheduling
+ * engine uses and deliberately keeps to free/busy-only (that's all it needs,
+ * and it's the more privacy-minimal call). The OAuth scope minted is the full
+ * "https://www.googleapis.com/auth/calendar" (see mint-google-token.mjs), so
+ * a real events.list() read is available — no reason to fall back to
+ * generic "Busy" labels layered under a second, DB-derived "Interview" block
+ * for the exact same real event. One real Calendar event -> one row here.
+ */
+export async function listEvents(
+  calendarId: string,
+  from: Date,
+  to: Date
+): Promise<{ id: string; title: string; startUtc: string; endUtc: string; kind: 'BUSY' | 'INTERVIEW' }[]> {
+  const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
+  const res = await calendar.events.list({
+    calendarId,
+    timeMin: from.toISOString(),
+    timeMax: to.toISOString(),
+    singleEvents: true,
+    orderBy: 'startTime',
+  });
+  return (res.data.items ?? [])
+    .filter((e) => e.status !== 'cancelled' && e.start?.dateTime && e.end?.dateTime)
+    .map((e) => ({
+      id: e.id as string,
+      title: e.summary || 'Busy',
+      startUtc: e.start!.dateTime as string,
+      endUtc: e.end!.dateTime as string,
+      kind: e.summary?.startsWith('Interview') ? ('INTERVIEW' as const) : ('BUSY' as const),
+    }));
+}
+
 export const GoogleCalendar: CalendarAdapter = {
   async getBusy(calendarId, from, to) {
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { getCalendarAdapter } from '@/lib/adapters/calendar';
 import { ApiOk, ApiErr, CalendarDTO, CalendarEventDTO, CalendarSource } from '@/lib/contracts';
 
 /**
@@ -31,21 +30,27 @@ export async function GET(req: Request) {
 
     const calendarId = me.calendarId || me.email;
 
-    /* CalendarAdapter.getBusy returns times only — right for scheduling, but
-     * this is the person's own calendar, where "Lunch" is more use than
-     * "Busy". In mock mode read the titled rows; in google mode fall back to
-     * free/busy, which is all the API exposes without a fuller read scope. */
+    const { googleCredentialsPresent } = await import('@/lib/adapters/google');
+    const googleReady = process.env.PROVIDER_MODE === 'google' && googleCredentialsPresent();
+
     let events: CalendarEventDTO[];
-    if (process.env.PROVIDER_MODE === 'google') {
-      const busy = await getCalendarAdapter().getBusy(calendarId, from, to);
-      events = busy.map((b, i) => ({
-        id: `busy_${i}_${b.start.getTime()}`,
-        title: 'Busy',
-        startUtc: b.start.toISOString(),
-        endUtc: b.end.toISOString(),
-        kind: 'BUSY',
-      }));
+    if (source === 'google' && googleReady) {
+      /* Real Google Calendar is the single source of truth here — one real
+       * event -> one row, using ITS OWN title (createEvent() already names
+       * ours "Interview: <job> — <candidate>"; seeded busy-blocks are named
+       * "Lunch", "Standups", etc). Previously this also layered a second,
+       * DB-derived "Interview · ..." row on top of a generic "Busy" row for
+       * the exact same real event — the same booking showing up twice with
+       * different labels. Reading real events directly (the OAuth scope
+       * minted is the full read/write "calendar" scope, so this has always
+       * been available) removes that duplication structurally. */
+      const { listEvents } = await import('@/lib/adapters/google');
+      const real = await listEvents(calendarId, from, to);
+      events = real.map((e) => ({ id: e.id, title: e.title, startUtc: e.startUtc, endUtc: e.endUtc, kind: e.kind }));
     } else {
+      // Mock mode, or the "Google Calendar" tab picked without real
+      // credentials configured: simulate from our own DB, since there's no
+      // real external calendar to read from.
       const rows = await prisma.calendarBusy.findMany({
         where: { calendarId, startUtc: { lt: to }, endUtc: { gt: from } },
       });
@@ -56,33 +61,33 @@ export async function GET(req: Request) {
         endUtc: r.endUtc.toISOString(),
         kind: 'BUSY',
       }));
-    }
 
-    // Confirmed interviews this person is still expected to attend.
-    const assignments = await prisma.panelAssignment.findMany({
-      where: { interviewerId: me.id, status: { notIn: ['DECLINED', 'REPLACED'] } },
-      include: {
-        request: {
-          include: { candidate: true, bookings: { where: { status: 'CONFIRMED' } } },
+      // Confirmed interviews this person is still expected to attend — only
+      // needed on the simulated path. The real-Google branch above already
+      // gets this for free from the real event's own title.
+      const assignments = await prisma.panelAssignment.findMany({
+        where: { interviewerId: me.id, status: { notIn: ['DECLINED', 'REPLACED'] } },
+        include: {
+          request: {
+            include: { candidate: true, bookings: { where: { status: 'CONFIRMED' } } },
+          },
         },
-      },
-    });
+      });
 
-    for (const a of assignments) {
-      for (const booking of a.request.bookings) {
-        events.push({
-          id: `cal_int_${booking.id}`,
-          title: `Interview · ${a.request.candidate.name} (${a.request.jobTitle})`,
-          startUtc: booking.startUtc.toISOString(),
-          endUtc: booking.endUtc.toISOString(),
-          kind: 'INTERVIEW',
-        });
+      for (const a of assignments) {
+        for (const booking of a.request.bookings) {
+          events.push({
+            id: `cal_int_${booking.id}`,
+            title: `Interview · ${a.request.candidate.name} (${a.request.jobTitle})`,
+            startUtc: booking.startUtc.toISOString(),
+            endUtc: booking.endUtc.toISOString(),
+            kind: 'INTERVIEW',
+          });
+        }
       }
     }
 
     events.sort((x, y) => Date.parse(x.startUtc) - Date.parse(y.startUtc));
-
-    const googleReady = process.env.PROVIDER_MODE === 'google';
     const data: CalendarDTO = {
       source,
       // In mock mode the Google option still renders — the rows are the same,

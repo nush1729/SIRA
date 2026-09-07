@@ -39,20 +39,49 @@ const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
 const prisma = new PrismaClient();
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * This script fires ~50-80 Calendar API calls in a few seconds (list+delete
+ * per stale event, insert per fresh one, across 5 calendars) — enough to trip
+ * Google's short burst-rate limit for an app still in OAuth "Testing" status,
+ * even though the account's real daily quota is nowhere close to used.
+ * A small fixed delay between calls plus a retry-with-backoff on that one
+ * specific error (403 "Calendar usage limits exceeded") makes re-running this
+ * after every reseed reliable instead of intermittently failing partway through.
+ */
+async function withRateLimitRetry(fn, { retries = 4, baseDelayMs = 2000 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err?.message || err?.errors?.[0]?.message || '';
+      const isBurstLimit = err?.code === 403 && /usage limits exceeded/i.test(message);
+      if (!isBurstLimit || attempt >= retries) throw err;
+      const delay = baseDelayMs * 2 ** attempt;
+      console.warn(`  (Calendar API burst limit hit — retrying in ${delay}ms...)`);
+      await sleep(delay);
+    }
+  }
+}
+
 async function clearPreviousSeedEvents(calendarId) {
   let pageToken;
   let deleted = 0;
   do {
-    const res = await calendar.events.list({
-      calendarId,
-      privateExtendedProperty: ['sira=1'],
-      pageToken,
-      maxResults: 2500,
-      showDeleted: false,
-    });
+    const res = await withRateLimitRetry(() =>
+      calendar.events.list({
+        calendarId,
+        privateExtendedProperty: ['sira=1'],
+        pageToken,
+        maxResults: 2500,
+        showDeleted: false,
+      })
+    );
     for (const ev of res.data.items ?? []) {
-      await calendar.events.delete({ calendarId, eventId: ev.id });
+      await withRateLimitRetry(() => calendar.events.delete({ calendarId, eventId: ev.id }));
       deleted++;
+      await sleep(120);
     }
     pageToken = res.data.nextPageToken || undefined;
   } while (pageToken);
@@ -83,15 +112,18 @@ async function main() {
     const deleted = await clearPreviousSeedEvents(calendarId);
     console.log(`${calendarId}: cleared ${deleted} previous seed event(s), creating ${events.length}...`);
     for (const ev of events) {
-      await calendar.events.insert({
-        calendarId,
-        requestBody: {
-          summary: ev.title,
-          start: { dateTime: ev.startUtc.toISOString(), timeZone: 'UTC' },
-          end: { dateTime: ev.endUtc.toISOString(), timeZone: 'UTC' },
-          extendedProperties: { private: { sira: '1' } },
-        },
-      });
+      await withRateLimitRetry(() =>
+        calendar.events.insert({
+          calendarId,
+          requestBody: {
+            summary: ev.title,
+            start: { dateTime: ev.startUtc.toISOString(), timeZone: 'UTC' },
+            end: { dateTime: ev.endUtc.toISOString(), timeZone: 'UTC' },
+            extendedProperties: { private: { sira: '1' } },
+          },
+        })
+      );
+      await sleep(120);
     }
   }
 
@@ -131,21 +163,24 @@ async function seedInterviewEvents() {
     );
     if (!active || !active.interviewer.calendarId?.includes('@')) continue;
 
-    const res = await calendar.events.insert({
-      calendarId: active.interviewer.calendarId,
-      conferenceDataVersion: 1,
-      requestBody: {
-        summary: `Interview: ${booking.request.jobTitle} — ${booking.request.candidate.name}`,
-        description: 'Interview arranged by SIRA (seed data).',
-        start: { dateTime: booking.startUtc.toISOString(), timeZone: 'UTC' },
-        end: { dateTime: booking.endUtc.toISOString(), timeZone: 'UTC' },
-        attendees: [{ email: booking.request.candidate.email }, { email: active.interviewer.email }],
-        conferenceData: {
-          createRequest: { requestId: `sira-seed-${booking.id}`, conferenceSolutionKey: { type: 'hangoutsMeet' } },
+    const res = await withRateLimitRetry(() =>
+      calendar.events.insert({
+        calendarId: active.interviewer.calendarId,
+        conferenceDataVersion: 1,
+        requestBody: {
+          summary: `Interview: ${booking.request.jobTitle} — ${booking.request.candidate.name}`,
+          description: 'Interview arranged by SIRA (seed data).',
+          start: { dateTime: booking.startUtc.toISOString(), timeZone: 'UTC' },
+          end: { dateTime: booking.endUtc.toISOString(), timeZone: 'UTC' },
+          attendees: [{ email: booking.request.candidate.email }, { email: active.interviewer.email }],
+          conferenceData: {
+            createRequest: { requestId: `sira-seed-${booking.id}`, conferenceSolutionKey: { type: 'hangoutsMeet' } },
+          },
+          extendedProperties: { private: { sira: '1' } },
         },
-        extendedProperties: { private: { sira: '1' } },
-      },
-    });
+      })
+    );
+    await sleep(120);
 
     await prisma.booking.update({
       where: { id: booking.id },
