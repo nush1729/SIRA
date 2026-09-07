@@ -100,6 +100,11 @@ function SourceToggle({
 
 function SourceBanner({ data }: { data: CalendarDTO }) {
   const google = data.source === "google";
+  // The backend only appends this suffix to accountLabel when PROVIDER_MODE
+  // isn't actually "google" — i.e. the Google tab is showing simulated data
+  // because real credentials aren't configured. Read that instead of a
+  // hardcoded badge, or this claims "simulated" even when it's genuinely live.
+  const simulated = google && Boolean(data.accountLabel?.includes("PROVIDER_MODE=mock"));
   return (
     <p
       className={cx(
@@ -111,7 +116,7 @@ function SourceBanner({ data }: { data: CalendarDTO }) {
       <span className="font-medium">{google ? "Google Calendar" : "Demo calendar"}</span>
       <span className="opacity-70">·</span>
       <span className="truncate">{data.accountLabel}</span>
-      {google && (
+      {simulated && (
         <span className="ml-auto rounded-full bg-white px-2 py-0.5 font-medium text-sky-700 ring-1 ring-sky-200">
           PROVIDER_MODE=mock — transport simulated
         </span>
