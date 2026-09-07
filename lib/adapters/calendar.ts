@@ -7,13 +7,17 @@ export interface EventInput {
   attendees: string[]; // emails
   summary: string;
   description: string;
+  // Which calendar to create the event on — the assigned interviewer's own
+  // secondary calendar, so the booked event lands in the same place getBusy()
+  // reads from. Falls back to the master account's primary calendar if unset.
+  calendarId?: string;
 }
 
 export interface CalendarAdapter {
   getBusy(calendarId: string, from: Date, to: Date): Promise<{start: Date; end: Date}[]>;
   createEvent(i: EventInput): Promise<{ eventId: string; meetLink: string | null }>;
-  updateEvent(eventId: string, i: Partial<EventInput>): Promise<void>;
-  deleteEvent(eventId: string): Promise<void>;
+  updateEvent(eventId: string, i: Partial<EventInput>, calendarId?: string): Promise<void>;
+  deleteEvent(eventId: string, calendarId?: string): Promise<void>;
 }
 
 export const MockCalendar: CalendarAdapter = {

@@ -42,6 +42,12 @@ export async function processReschedule(requestId: string, declinerId?: string):
 
   const booking = await prisma.booking.findFirst({ where: { requestId, status: 'CONFIRMED' } });
   const adapter = getCalendarAdapter();
+  // The calendar the OLD event was created on — same active (non-declined,
+  // non-replaced) panel member's calendar createEvent() targeted originally.
+  // Read from `request.panel` fetched above, before any mutation below.
+  const oldInterviewerCalendarId =
+    request.panel.find((p) => p.status !== 'DECLINED' && p.status !== 'REPLACED')?.interviewer.calendarId ??
+    undefined;
 
   /* -- Branch 1: Same-Time Replacement (§6A step 1) ------------------------
    * The booked time is protected; only WHO runs it changes. Uses the exact,
@@ -187,7 +193,7 @@ export async function processReschedule(requestId: string, declinerId?: string):
         });
 
         // Delete old calendar event AFTER transaction commits (external I/O)
-        if (booking?.eventId) await adapter.deleteEvent(booking.eventId);
+        if (booking?.eventId) await adapter.deleteEvent(booking.eventId, oldInterviewerCalendarId);
 
         const newInterviewers = await prisma.user.findMany({ where: { id: { in: bestSlot.interviewerIds ?? [] } } });
         const attendees = [request.candidate.email, ...newInterviewers.map((u) => u.email)];
@@ -198,6 +204,7 @@ export async function processReschedule(requestId: string, declinerId?: string):
           attendees,
           summary: `Interview (Rescheduled): ${request.jobTitle}`,
           description: 'Interview via SIRA.',
+          calendarId: newInterviewers[0]?.calendarId ?? undefined,
         });
 
         await prisma.booking.update({
@@ -266,7 +273,7 @@ export async function processReschedule(requestId: string, declinerId?: string):
   });
 
   // Delete old calendar event AFTER transaction commits (external I/O)
-  if (booking?.eventId) await adapter.deleteEvent(booking.eventId);
+  if (booking?.eventId) await adapter.deleteEvent(booking.eventId, oldInterviewerCalendarId);
 
   const baseUrl = process.env.APP_URL || 'http://localhost:3000';
   await sendNotification({

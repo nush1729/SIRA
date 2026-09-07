@@ -55,8 +55,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 
     const bookingResult = await prisma.$transaction(async (tx) => {
       const currentReq = await tx.interviewRequest.findUnique({ where: { id } });
-      if (currentReq?.status === 'SCHEDULED') throw new Error('ALREADY_BOOKED');
       if (currentReq?.status === 'CANCELLED') throw new Error('REQUEST_CANCELLED');
+      // Deliberately NOT rejecting status === 'SCHEDULED' here: this route is also
+      // how a reschedule re-books a request that's already SCHEDULED, and the
+      // supersede-old-booking step right below is exactly what's meant to handle
+      // that. A real conflict (same interviewer/time already locked, including by
+      // a concurrent request) is still caught atomically by reserveInterviewers()
+      // below via the InterviewerTimeLock unique constraint.
 
       await tx.booking.updateMany({
         where: { requestId: id, status: 'CONFIRMED' },
@@ -111,6 +116,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
       attendees: [request.candidate.email, ...interviewers.map((i) => i.email)],
       summary: `Interview: ${request.jobTitle} — ${request.candidate.name}`,
       description: 'Interview arranged by SIRA.',
+      // Land the event on the assigned interviewer's own calendar — the same
+      // one getBusy() reads from — not the master account's primary calendar.
+      calendarId: interviewers[0]?.calendarId ?? undefined,
     });
 
     await prisma.booking.update({

@@ -58,7 +58,7 @@ export const GoogleCalendar: CalendarAdapter = {
   async createEvent(input: EventInput) {
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
     const res = await calendar.events.insert({
-      calendarId: process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
+      calendarId: input.calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
       // Required for Google Meet to actually be created.
       conferenceDataVersion: 1,
       sendUpdates: 'all',
@@ -85,10 +85,10 @@ export const GoogleCalendar: CalendarAdapter = {
     return { eventId: res.data.id as string, meetLink };
   },
 
-  async updateEvent(eventId, input) {
+  async updateEvent(eventId, input, calendarId) {
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
     await calendar.events.patch({
-      calendarId: process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
+      calendarId: calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
       eventId,
       sendUpdates: 'all',
       requestBody: {
@@ -101,11 +101,11 @@ export const GoogleCalendar: CalendarAdapter = {
     });
   },
 
-  async deleteEvent(eventId) {
+  async deleteEvent(eventId, calendarId) {
     const calendar = google.calendar({ version: 'v3', auth: oauthClient() });
     try {
       await calendar.events.delete({
-        calendarId: process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
+        calendarId: calendarId || process.env.GOOGLE_PRIMARY_CALENDAR_ID || 'primary',
         eventId,
         sendUpdates: 'all',
       });

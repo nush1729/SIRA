@@ -40,7 +40,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     if (booking?.eventId) {
       const adapter = getCalendarAdapter();
-      await adapter.deleteEvent(booking.eventId);
+      // Same calendar createEvent() used — an active (non-declined/replaced)
+      // panel member's own calendar, not the master account's primary.
+      const activeInterviewer = request.panel.find((p) => p.status !== 'DECLINED' && p.status !== 'REPLACED');
+      await adapter.deleteEvent(booking.eventId, activeInterviewer?.interviewer.calendarId ?? undefined);
     }
 
     const startUtc = (booking?.startUtc ?? new Date()).toISOString();
