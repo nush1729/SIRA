@@ -201,6 +201,28 @@ const ROLE_TONE: Record<string, string> = {
 
 function DemoAccounts({ onPick }: { onPick: (email: string) => void }) {
   const [open, setOpen] = React.useState(false);
+  // `demoLogins` is a static fixture that only matches a fresh @example.com
+  // seed. Once DEMO_CANDIDATE_INBOX/DEMO_INTERVIEWER_INBOX are set (Google
+  // mode), the real seeded emails become plus-addressed Gmail variants — so
+  // fetch the actual current accounts and fall back to the fixture only if
+  // that fails (e.g. the DB hasn't been seeded yet).
+  const [accounts, setAccounts] = React.useState<{ email: string; role: string }[]>(demoLogins);
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch("/api/dev/seed")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && data?.ok && Array.isArray(data.logins) && data.logins.length > 0) {
+          setAccounts(data.logins);
+        }
+      })
+      .catch(() => {
+        /* stay on the static fixture */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   return (
     <div className="mt-5 overflow-hidden rounded-xl bg-white/70 ring-1 ring-zinc-200/80">
       <button
@@ -216,7 +238,7 @@ function DemoAccounts({ onPick }: { onPick: (email: string) => void }) {
       </button>
       {open && (
         <ul className="animate-fade-in border-t border-zinc-100 p-2">
-          {demoLogins.map((l) => (
+          {accounts.map((l) => (
             <li key={l.email}>
               <button
                 type="button"

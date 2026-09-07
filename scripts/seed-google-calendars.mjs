@@ -95,9 +95,66 @@ async function main() {
     }
   }
 
+  await seedInterviewEvents();
+
   console.log('\nDone. These are the exact CalendarBusy rows already visible in mock mode —');
   console.log('now they exist as real Google Calendar events too.');
   await prisma.$disconnect();
+}
+
+/**
+ * The seed script's pre-scheduled demo scenarios (Sophia, Ryan, Nikhil,
+ * Chloe, ...) write straight to the Booking table with a fake meetLink —
+ * cheap and fast for `npm run seed`, but it means they never existed as real
+ * Calendar events in ANY mode. Recreate them for real here, on the currently
+ * assigned interviewer's own calendar (mirrors createEvent()'s routing), and
+ * write the real eventId/meetLink back so cancel/decline on these seeded
+ * bookings can find and clean up the real event too.
+ */
+async function seedInterviewEvents() {
+  const bookings = await prisma.booking.findMany({
+    where: { status: 'CONFIRMED' },
+    include: {
+      request: {
+        include: {
+          candidate: true,
+          panel: { include: { interviewer: true } },
+        },
+      },
+    },
+  });
+
+  let created = 0;
+  for (const booking of bookings) {
+    const active = booking.request.panel.find(
+      (p) => p.status !== 'DECLINED' && p.status !== 'REPLACED'
+    );
+    if (!active || !active.interviewer.calendarId?.includes('@')) continue;
+
+    const res = await calendar.events.insert({
+      calendarId: active.interviewer.calendarId,
+      conferenceDataVersion: 1,
+      requestBody: {
+        summary: `Interview: ${booking.request.jobTitle} — ${booking.request.candidate.name}`,
+        description: 'Interview arranged by SIRA (seed data).',
+        start: { dateTime: booking.startUtc.toISOString(), timeZone: 'UTC' },
+        end: { dateTime: booking.endUtc.toISOString(), timeZone: 'UTC' },
+        attendees: [{ email: booking.request.candidate.email }, { email: active.interviewer.email }],
+        conferenceData: {
+          createRequest: { requestId: `sira-seed-${booking.id}`, conferenceSolutionKey: { type: 'hangoutsMeet' } },
+        },
+        extendedProperties: { private: { sira: '1' } },
+      },
+    });
+
+    await prisma.booking.update({
+      where: { id: booking.id },
+      data: { eventId: res.data.id, meetLink: res.data.hangoutLink ?? booking.meetLink },
+    });
+    created++;
+    console.log(`  + real event for ${booking.request.candidate.name} on ${active.interviewer.name}'s calendar`);
+  }
+  console.log(`Created ${created} real interview event(s) for pre-scheduled demo scenarios.`);
 }
 
 main().catch((err) => {
